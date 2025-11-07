@@ -10854,7 +10854,7 @@ var require_fetch = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/undici@5
 			this.emit("terminated", error$1);
 		}
 	};
-	function fetch(input, init = {}) {
+	function fetch$1(input, init = {}) {
 		webidl$7.argumentLengthCheck(arguments, 1, { header: "globalThis.fetch" });
 		const p = createDeferredPromise$1();
 		let requestObject;
@@ -11473,7 +11473,7 @@ var require_fetch = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/undici@5
 		}
 	}
 	module.exports = {
-		fetch,
+		fetch: fetch$1,
 		Fetch,
 		fetching: fetching$2,
 		finalizeAndReportTiming
@@ -14390,7 +14390,7 @@ var require_undici = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/undici@
 	module.exports.getGlobalDispatcher = getGlobalDispatcher;
 	if (util.nodeMajor > 16 || util.nodeMajor === 16 && util.nodeMinor >= 8) {
 		let fetchImpl = null;
-		module.exports.fetch = async function fetch$1(resource) {
+		module.exports.fetch = async function fetch$2(resource) {
 			if (!fetchImpl) fetchImpl = require_fetch().fetch;
 			try {
 				return await fetchImpl(...arguments);
@@ -16934,13 +16934,52 @@ var require_core = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/@actions+
 //#endregion
 //#region src/index.ts
 var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
+const ENDFORM_URL = "https://endform.dev";
 async function run() {
 	try {
-		console.log("Hello World from register-vercel-check!");
-		import_core.setOutput("message", "Hello World from register-vercel-check!");
+		import_core.info("Requesting OIDC token from GitHub...");
+		const token = await getOIDCToken();
+		import_core.info("Successfully obtained OIDC token");
+		import_core.debug(`Token length: ${token.length}`);
+		import_core.info("Registering check with Endform API...");
+		const result = await registerCheck(token);
+		import_core.info("Check registered successfully!");
+		import_core.setOutput("check-id", result.id);
+		import_core.setOutput("message", "Check registered successfully");
 	} catch (error$1) {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
+}
+async function registerCheck(token) {
+	const response = await fetch(`${ENDFORM_URL}/api/integrations/v1/vercel/actions-deployments/register-check`, {
+		method: "GET",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${token}`
+		}
+	});
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Failed to register check: ${response.status} ${response.statusText}\n${errorText}`);
+	}
+	return await response.json();
+}
+async function getOIDCToken() {
+	const tokenRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+	const tokenRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+	if (!tokenRequestUrl || !tokenRequestToken) throw new Error("Unable to get OIDC token. Please ensure the workflow has 'id-token: write' permission configured:\n\npermissions:\n  id-token: write\n  contents: read\n");
+	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(ENDFORM_URL)}`;
+	const response = await fetch(url, {
+		method: "GET",
+		headers: {
+			Authorization: `Bearer ${tokenRequestToken}`,
+			Accept: "application/json"
+		}
+	});
+	if (!response.ok) throw new Error(`Failed to get OIDC token: ${response.status} ${response.statusText}`);
+	const data = await response.json();
+	if (!data.value) throw new Error("Failed to get OIDC token: No value returned");
+	return data.value;
 }
 run();
 

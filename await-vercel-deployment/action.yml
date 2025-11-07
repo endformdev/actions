@@ -2,8 +2,11 @@ name: 'Await Vercel Deployment'
 description: 'Wait for Vercel deployment to complete'
 author: 'endformdev'
 inputs:
-  example-input:
-    description: 'Example input'
+  project-name:
+    description: 'Name of the Vercel project to wait for'
+    required: true
+  set-url-env-var:
+    description: 'Environment variable name to set with the vercel deployment url (eg. BASE_URL)'
     required: true
 runs:
   using: 'node24'

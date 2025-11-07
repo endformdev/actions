@@ -10854,7 +10854,7 @@ var require_fetch = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/undici@5
 			this.emit("terminated", error$1);
 		}
 	};
-	function fetch(input, init = {}) {
+	function fetch$1(input, init = {}) {
 		webidl$7.argumentLengthCheck(arguments, 1, { header: "globalThis.fetch" });
 		const p = createDeferredPromise$1();
 		let requestObject;
@@ -11473,7 +11473,7 @@ var require_fetch = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/undici@5
 		}
 	}
 	module.exports = {
-		fetch,
+		fetch: fetch$1,
 		Fetch,
 		fetching: fetching$2,
 		finalizeAndReportTiming
@@ -14390,7 +14390,7 @@ var require_undici = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/undici@
 	module.exports.getGlobalDispatcher = getGlobalDispatcher;
 	if (util.nodeMajor > 16 || util.nodeMajor === 16 && util.nodeMinor >= 8) {
 		let fetchImpl = null;
-		module.exports.fetch = async function fetch$1(resource) {
+		module.exports.fetch = async function fetch$2(resource) {
 			if (!fetchImpl) fetchImpl = require_fetch().fetch;
 			try {
 				return await fetchImpl(...arguments);
@@ -16934,14 +16934,50 @@ var require_core = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/@actions+
 //#endregion
 //#region src/index.ts
 var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
+const ENDFORM_URL = "https://endform.dev";
 async function run() {
 	try {
-		import_core.getInput("github-token", { required: true });
-		console.log("Hello World from await-vercel-deployment!");
-		import_core.setOutput("message", "Hello World from await-vercel-deployment!");
+		const token = await getOIDCToken();
+		import_core.info("Successfully obtained OIDC token");
+		import_core.debug(`Token length: ${token.length}`);
+		const projectName = import_core.getInput("project-name", { required: true });
+		const setUrlEnvVar = import_core.getInput("set-url-env-var", { required: true });
+		import_core.info("Waiting for Vercel deployments...");
+		const result = await waitForVercelDeployment(token, projectName);
+		import_core.exportVariable(setUrlEnvVar, result.url);
+		import_core.setOutput("message", "Deployment ready");
 	} catch (error$1) {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
+}
+async function waitForVercelDeployment(token, projectName) {
+	const apiUrl = `${ENDFORM_URL}/api/integrations/v1/vercel/actions-deployments/${projectName}/wait`;
+	const response = await fetch(apiUrl, {
+		method: "GET",
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Failed to wait for deployments: ${response.status} ${response.statusText}\n${errorText}`);
+	}
+	return await response.json();
+}
+async function getOIDCToken() {
+	const tokenRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+	const tokenRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+	if (!tokenRequestUrl || !tokenRequestToken) throw new Error("Unable to get OIDC token. Please ensure the workflow has 'id-token: write' permission configured:\n\npermissions:\n  id-token: write\n  contents: read\n");
+	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(ENDFORM_URL)}`;
+	const response = await fetch(url, {
+		method: "GET",
+		headers: {
+			Authorization: `Bearer ${tokenRequestToken}`,
+			Accept: "application/json"
+		}
+	});
+	if (!response.ok) throw new Error(`Failed to get OIDC token: ${response.status} ${response.statusText}`);
+	const data = await response.json();
+	if (!data.value) throw new Error("Failed to get OIDC token: No value returned");
+	return data.value;
 }
 run();
 
