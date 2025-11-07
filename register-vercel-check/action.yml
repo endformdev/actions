@@ -1,0 +1,10 @@
+name: 'Register Vercel Check'
+description: 'Register a check for Vercel deployment'
+author: 'endformdev'
+inputs:
+  example-input:
+    description: 'Example input'
+    required: true
+runs:
+  using: 'node24'
+  main: 'dist/index.mjs'

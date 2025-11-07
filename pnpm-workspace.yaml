@@ -1,0 +1,3 @@
+packages:
+  - "await-vercel-deployment"
+  - "register-vercel-check"

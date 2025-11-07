@@ -1,0 +1,37 @@
+{
+	"name": "actions",
+	"version": "1.0.0",
+	"description": "GitHub Actions for Vercel deployments",
+	"type": "module",
+	"license": "Apache-2.0",
+	"author": "Oliver Stenbom <oliver@endform.dev>",
+	"homepage": "https://github.com/endformdev/actions#readme",
+	"bugs": {
+		"url": "https://github.com/endformdev/actions/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/endformdev/actions"
+	},
+	"keywords": [
+		"github-actions",
+		"vercel",
+		"playwright",
+		"endform"
+	],
+	"scripts": {
+		"build": "pnpm --filter './await-vercel-deployment' build && pnpm --filter './register-vercel-check' build",
+		"typecheck": "tsc --noEmit",
+		"format": "biome format --write"
+	},
+	"packageManager": "pnpm@10.10.0",
+	"devDependencies": {
+		"@biomejs/biome": "2.3.4",
+		"@types/node": "^24.10.0",
+		"tsdown": "^0.16.0",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@actions/core": "^1.11.1"
+	}
+}

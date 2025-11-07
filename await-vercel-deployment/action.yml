@@ -1,0 +1,10 @@
+name: 'Await Vercel Deployment'
+description: 'Wait for Vercel deployment to complete'
+author: 'endformdev'
+inputs:
+  example-input:
+    description: 'Example input'
+    required: true
+runs:
+  using: 'node24'
+  main: 'dist/index.mjs'

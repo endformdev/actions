@@ -1,0 +1,10 @@
+{
+	"name": "await-vercel-deployment",
+	"version": "1.0.0",
+	"description": "Wait for Vercel deployment to complete",
+	"type": "module",
+	"scripts": {
+		"build": "tsdown",
+		"dev": "tsdown --watch"
+	}
+}
