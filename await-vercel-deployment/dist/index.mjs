@@ -16934,39 +16934,109 @@ var require_core = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/@actions+
 //#endregion
 //#region src/index.ts
 var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
-const ENDFORM_URL = "https://endform.dev";
+const DEFAULT_ENDFORM_URL = "https://endform.dev";
+const DEFAULT_TIMEOUT_SECONDS = 600;
+const POLL_INTERVAL_MS = 5e3;
 async function run() {
 	try {
+		const projectName = import_core.getInput("project-name");
+		const projectId = import_core.getInput("project-id");
+		const setUrlEnvVar = import_core.getInput("set-url-env-var", { required: true });
+		const timeoutSeconds = Number.parseInt(import_core.getInput("timeout-seconds") || String(DEFAULT_TIMEOUT_SECONDS), 10);
+		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
 		const token = await getOIDCToken();
 		import_core.info("Successfully obtained OIDC token");
 		import_core.debug(`Token length: ${token.length}`);
-		const projectName = import_core.getInput("project-name", { required: true });
-		const setUrlEnvVar = import_core.getInput("set-url-env-var", { required: true });
-		import_core.info("Waiting for Vercel deployments...");
-		const result = await waitForVercelDeployment(token, projectName);
-		import_core.exportVariable(setUrlEnvVar, result.url);
+		if (!projectName && !projectId) throw new Error("Either 'project-name' or 'project-id' input must be provided");
+		if (Number.isNaN(timeoutSeconds) || timeoutSeconds <= 0) throw new Error("'timeout-seconds' must be a positive number");
+		const sha = process.env.GITHUB_SHA;
+		if (!sha) throw new Error("GITHUB_SHA environment variable is not set");
+		import_core.info(`Waiting for Vercel deployment (${projectName || projectId})...`);
+		import_core.info(`Timeout: ${timeoutSeconds} seconds`);
+		if (endformUrl !== DEFAULT_ENDFORM_URL) import_core.info(`Using custom Endform URL: ${endformUrl}`);
+		const result = await waitForVercelDeployment(token, sha, projectName || null, projectId || null, timeoutSeconds, endformUrl);
+		import_core.exportVariable(setUrlEnvVar, result.deploymentURL);
+		import_core.setOutput("deployment-url", result.deploymentURL);
+		import_core.setOutput("deployment-id", result.deploymentId);
 		import_core.setOutput("message", "Deployment ready");
+		import_core.info(`Deployment ready: ${result.deploymentURL}`);
 	} catch (error$1) {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
-async function waitForVercelDeployment(token, projectName) {
-	const apiUrl = `${ENDFORM_URL}/api/integrations/v1/vercel/actions-deployments/${projectName}/wait`;
-	const response = await fetch(apiUrl, {
-		method: "GET",
-		headers: { Authorization: `Bearer ${token}` }
-	});
-	if (!response.ok) {
-		const errorText = await response.text();
-		throw new Error(`Failed to wait for deployments: ${response.status} ${response.statusText}\n${errorText}`);
+async function waitForVercelDeployment(token, sha, projectName, projectId, timeoutSeconds, endformUrl) {
+	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
+	const startTime = Date.now();
+	const timeoutMs = timeoutSeconds * 1e3;
+	while (true) {
+		if (Date.now() - startTime > timeoutMs) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
+		try {
+			const response = await fetch(apiUrl, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json"
+				},
+				body: JSON.stringify({
+					sha,
+					vercelProjectName: projectName,
+					vercelProjectId: projectId
+				})
+			});
+			if (response.status === 404) {
+				import_core.info("Deployment not found yet, will retry...");
+				await sleep(POLL_INTERVAL_MS);
+				continue;
+			}
+			if (response.status === 403) {
+				const errorText = await response.text();
+				throw new Error(`Authorization failed: ${response.status} ${response.statusText}\n${errorText}`);
+			}
+			if (response.status === 400) {
+				const errorText = await response.text();
+				throw new Error(`Bad request: ${response.status} ${response.statusText}\n${errorText}`);
+			}
+			if (!response.ok) {
+				const errorText = await response.text();
+				import_core.warning(`API request failed: ${response.status} ${response.statusText}\n${errorText}`);
+				await sleep(POLL_INTERVAL_MS);
+				continue;
+			}
+			const result = await response.json();
+			switch (result.status) {
+				case "READY":
+					if (!result.deploymentURL) throw new Error("Deployment is ready but no URL was provided");
+					return result;
+				case "ERROR":
+				case "CANCELED": throw new Error(`Deployment failed with status: ${result.status}`);
+				case "BUILDING":
+				case "INITIALIZING":
+				case "QUEUED":
+					import_core.info(`Deployment status: ${result.status}, waiting...`);
+					await sleep(POLL_INTERVAL_MS);
+					continue;
+				default:
+					import_core.warning(`Unknown deployment status: ${result.status}`);
+					await sleep(POLL_INTERVAL_MS);
+					continue;
+			}
+		} catch (error$1) {
+			if (error$1 instanceof Error && error$1.message.startsWith("Deployment failed")) throw error$1;
+			if (error$1 instanceof Error && error$1.message.startsWith("Authorization failed")) throw error$1;
+			if (error$1 instanceof Error && error$1.message.startsWith("Bad request")) throw error$1;
+			import_core.warning(`Error checking deployment status: ${error$1 instanceof Error ? error$1.message : String(error$1)}`);
+			await sleep(POLL_INTERVAL_MS);
+		}
 	}
-	return await response.json();
+}
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function getOIDCToken() {
 	const tokenRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
 	const tokenRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 	if (!tokenRequestUrl || !tokenRequestToken) throw new Error("Unable to get OIDC token. Please ensure the workflow has 'id-token: write' permission configured:\n\npermissions:\n  id-token: write\n  contents: read\n");
-	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(ENDFORM_URL)}`;
+	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(DEFAULT_ENDFORM_URL)}`;
 	const response = await fetch(url, {
 		method: "GET",
 		headers: {

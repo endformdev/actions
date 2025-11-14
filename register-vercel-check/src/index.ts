@@ -1,12 +1,15 @@
 import * as core from "@actions/core";
 
-const ENDFORM_URL = "https://endform.dev";
+const DEFAULT_ENDFORM_URL = "https://endform.dev";
 
 async function run() {
 	try {
+		// Allow overriding Endform URL via environment variable (for testing)
+		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
+
 		core.info("Requesting OIDC token from GitHub...");
 
-		// Request token with your API as the audience
+		// Request token with the default Endform URL as the audience (always use production for OIDC)
 		const token = await getOIDCToken();
 
 		core.info("Successfully obtained OIDC token");
@@ -14,25 +17,36 @@ async function run() {
 
 		// Register the check with your API
 		core.info("Registering check with Endform API...");
-		const result = await registerCheck(token);
+		if (endformUrl !== DEFAULT_ENDFORM_URL) {
+			core.info(`Using custom Endform URL: ${endformUrl}`);
+		}
+		await registerCheck(token, endformUrl);
 
 		core.info("Check registered successfully!");
-		core.setOutput("check-id", result.id);
 		core.setOutput("message", "Check registered successfully");
 	} catch (error) {
 		core.setFailed(error instanceof Error ? error.message : String(error));
 	}
 }
 
-async function registerCheck(token: string) {
+async function registerCheck(token: string, endformUrl: string) {
+	// Get SHA from GitHub context
+	const sha = process.env.GITHUB_SHA;
+	if (!sha) {
+		throw new Error("GITHUB_SHA environment variable is not set");
+	}
+
 	const response = await fetch(
-		`${ENDFORM_URL}/api/integrations/v1/vercel/actions-deployments/register-check`,
+		`${endformUrl}/api/integrations/v1/actions/register-vercel-check`,
 		{
-			method: "GET",
+			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${token}`,
 			},
+			body: JSON.stringify({
+				sha,
+			}),
 		},
 	);
 
@@ -43,7 +57,8 @@ async function registerCheck(token: string) {
 		);
 	}
 
-	return (await response.json()) as { id: string };
+	// The API returns 200 with no body on success
+	return { success: true };
 }
 
 async function getOIDCToken(): Promise<string> {
@@ -60,7 +75,7 @@ async function getOIDCToken(): Promise<string> {
 		);
 	}
 
-	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(ENDFORM_URL)}`;
+	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(DEFAULT_ENDFORM_URL)}`;
 
 	const response = await fetch(url, {
 		method: "GET",

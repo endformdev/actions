@@ -16934,41 +16934,45 @@ var require_core = /* @__PURE__ */ __commonJS({ "../node_modules/.pnpm/@actions+
 //#endregion
 //#region src/index.ts
 var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
-const ENDFORM_URL = "https://endform.dev";
+const DEFAULT_ENDFORM_URL = "https://endform.dev";
 async function run() {
 	try {
+		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
 		import_core.info("Requesting OIDC token from GitHub...");
 		const token = await getOIDCToken();
 		import_core.info("Successfully obtained OIDC token");
 		import_core.debug(`Token length: ${token.length}`);
 		import_core.info("Registering check with Endform API...");
-		const result = await registerCheck(token);
+		if (endformUrl !== DEFAULT_ENDFORM_URL) import_core.info(`Using custom Endform URL: ${endformUrl}`);
+		await registerCheck(token, endformUrl);
 		import_core.info("Check registered successfully!");
-		import_core.setOutput("check-id", result.id);
 		import_core.setOutput("message", "Check registered successfully");
 	} catch (error$1) {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
-async function registerCheck(token) {
-	const response = await fetch(`${ENDFORM_URL}/api/integrations/v1/vercel/actions-deployments/register-check`, {
-		method: "GET",
+async function registerCheck(token, endformUrl) {
+	const sha = process.env.GITHUB_SHA;
+	if (!sha) throw new Error("GITHUB_SHA environment variable is not set");
+	const response = await fetch(`${endformUrl}/api/integrations/v1/actions/register-vercel-check`, {
+		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${token}`
-		}
+		},
+		body: JSON.stringify({ sha })
 	});
 	if (!response.ok) {
 		const errorText = await response.text();
 		throw new Error(`Failed to register check: ${response.status} ${response.statusText}\n${errorText}`);
 	}
-	return await response.json();
+	return { success: true };
 }
 async function getOIDCToken() {
 	const tokenRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
 	const tokenRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 	if (!tokenRequestUrl || !tokenRequestToken) throw new Error("Unable to get OIDC token. Please ensure the workflow has 'id-token: write' permission configured:\n\npermissions:\n  id-token: write\n  contents: read\n");
-	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(ENDFORM_URL)}`;
+	const url = `${tokenRequestUrl}&audience=${encodeURIComponent(DEFAULT_ENDFORM_URL)}`;
 	const response = await fetch(url, {
 		method: "GET",
 		headers: {

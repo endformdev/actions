@@ -3,11 +3,25 @@ description: 'Wait for Vercel deployment to complete'
 author: 'endformdev'
 inputs:
   project-name:
-    description: 'Name of the Vercel project to wait for'
-    required: true
+    description: 'Name of the Vercel project to wait for (either project-name or project-id must be provided)'
+    required: false
+  project-id:
+    description: 'ID of the Vercel project to wait for (either project-name or project-id must be provided)'
+    required: false
   set-url-env-var:
     description: 'Environment variable name to set with the vercel deployment url (eg. BASE_URL)'
     required: true
+  timeout-seconds:
+    description: 'Maximum time to wait for deployment in seconds (default: 600 = 10 minutes)'
+    required: false
+    default: '600'
+outputs:
+  deployment-url:
+    description: 'The URL of the deployment'
+  deployment-id:
+    description: 'The ID of the deployment'
+  message:
+    description: 'Status message'
 runs:
   using: 'node24'
   main: 'dist/index.mjs'
