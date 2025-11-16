@@ -6,7 +6,13 @@ const POLL_INTERVAL_MS = 5000; // 5 seconds
 
 interface DeploymentStatusResponse {
 	deploymentId: string;
-	status: "BUILDING" | "ERROR" | "INITIALIZING" | "QUEUED" | "READY" | "CANCELED";
+	status:
+		| "BUILDING"
+		| "ERROR"
+		| "INITIALIZING"
+		| "QUEUED"
+		| "READY"
+		| "CANCELED";
 	deploymentURL: string | null;
 }
 
@@ -37,9 +43,7 @@ async function run() {
 		}
 
 		if (Number.isNaN(timeoutSeconds) || timeoutSeconds <= 0) {
-			throw new Error(
-				"'timeout-seconds' must be a positive number",
-			);
+			throw new Error("'timeout-seconds' must be a positive number");
 		}
 
 		// Get SHA from GitHub context
@@ -48,10 +52,14 @@ async function run() {
 			throw new Error("GITHUB_SHA environment variable is not set");
 		}
 
+		// Get job name from GitHub context
+		const jobName = process.env.GITHUB_JOB;
+		if (!jobName) {
+			throw new Error("GITHUB_JOB environment variable is not set");
+		}
+
 		// Wait for deployments
-		core.info(
-			`Waiting for Vercel deployment (${projectName || projectId})...`,
-		);
+		core.info(`Waiting for Vercel deployment (${projectName || projectId})...`);
 		core.info(`Timeout: ${timeoutSeconds} seconds`);
 		if (endformUrl !== DEFAULT_ENDFORM_URL) {
 			core.info(`Using custom Endform URL: ${endformUrl}`);
@@ -60,6 +68,7 @@ async function run() {
 		const result = await waitForVercelDeployment(
 			token,
 			sha,
+			jobName,
 			projectName || null,
 			projectId || null,
 			timeoutSeconds,
@@ -80,6 +89,7 @@ async function run() {
 async function waitForVercelDeployment(
 	token: string,
 	sha: string,
+	jobName: string,
 	projectName: string | null,
 	projectId: string | null,
 	timeoutSeconds: number,
@@ -106,6 +116,7 @@ async function waitForVercelDeployment(
 				},
 				body: JSON.stringify({
 					sha,
+					jobName,
 					vercelProjectName: projectName,
 					vercelProjectId: projectId,
 				}),
@@ -158,9 +169,7 @@ async function waitForVercelDeployment(
 				case "ERROR":
 				case "CANCELED":
 					// Deployment failed
-					throw new Error(
-						`Deployment failed with status: ${result.status}`,
-					);
+					throw new Error(`Deployment failed with status: ${result.status}`);
 
 				case "BUILDING":
 				case "INITIALIZING":
@@ -177,10 +186,16 @@ async function waitForVercelDeployment(
 			}
 		} catch (error) {
 			// If it's our own thrown error, re-throw it
-			if (error instanceof Error && error.message.startsWith("Deployment failed")) {
+			if (
+				error instanceof Error &&
+				error.message.startsWith("Deployment failed")
+			) {
 				throw error;
 			}
-			if (error instanceof Error && error.message.startsWith("Authorization failed")) {
+			if (
+				error instanceof Error &&
+				error.message.startsWith("Authorization failed")
+			) {
 				throw error;
 			}
 			if (error instanceof Error && error.message.startsWith("Bad request")) {

@@ -16951,10 +16951,12 @@ async function run() {
 		if (Number.isNaN(timeoutSeconds) || timeoutSeconds <= 0) throw new Error("'timeout-seconds' must be a positive number");
 		const sha = process.env.GITHUB_SHA;
 		if (!sha) throw new Error("GITHUB_SHA environment variable is not set");
+		const jobName = process.env.GITHUB_JOB;
+		if (!jobName) throw new Error("GITHUB_JOB environment variable is not set");
 		import_core.info(`Waiting for Vercel deployment (${projectName || projectId})...`);
 		import_core.info(`Timeout: ${timeoutSeconds} seconds`);
 		if (endformUrl !== DEFAULT_ENDFORM_URL) import_core.info(`Using custom Endform URL: ${endformUrl}`);
-		const result = await waitForVercelDeployment(token, sha, projectName || null, projectId || null, timeoutSeconds, endformUrl);
+		const result = await waitForVercelDeployment(token, sha, jobName, projectName || null, projectId || null, timeoutSeconds, endformUrl);
 		import_core.exportVariable(setUrlEnvVar, result.deploymentURL);
 		import_core.setOutput("deployment-url", result.deploymentURL);
 		import_core.setOutput("deployment-id", result.deploymentId);
@@ -16964,7 +16966,7 @@ async function run() {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
-async function waitForVercelDeployment(token, sha, projectName, projectId, timeoutSeconds, endformUrl) {
+async function waitForVercelDeployment(token, sha, jobName, projectName, projectId, timeoutSeconds, endformUrl) {
 	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1e3;
@@ -16979,6 +16981,7 @@ async function waitForVercelDeployment(token, sha, projectName, projectId, timeo
 				},
 				body: JSON.stringify({
 					sha,
+					jobName,
 					vercelProjectName: projectName,
 					vercelProjectId: projectId
 				})

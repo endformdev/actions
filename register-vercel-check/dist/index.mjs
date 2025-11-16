@@ -16942,16 +16942,18 @@ async function run() {
 		const token = await getOIDCToken();
 		import_core.info("Successfully obtained OIDC token");
 		import_core.debug(`Token length: ${token.length}`);
+		const jobName = process.env.GITHUB_JOB;
+		if (!jobName) throw new Error("GITHUB_JOB environment variable is not set");
 		import_core.info("Registering check with Endform API...");
 		if (endformUrl !== DEFAULT_ENDFORM_URL) import_core.info(`Using custom Endform URL: ${endformUrl}`);
-		await registerCheck(token, endformUrl);
+		await registerCheck(token, jobName, endformUrl);
 		import_core.info("Check registered successfully!");
 		import_core.setOutput("message", "Check registered successfully");
 	} catch (error$1) {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
-async function registerCheck(token, endformUrl) {
+async function registerCheck(token, jobName, endformUrl) {
 	const sha = process.env.GITHUB_SHA;
 	if (!sha) throw new Error("GITHUB_SHA environment variable is not set");
 	const response = await fetch(`${endformUrl}/api/integrations/v1/actions/register-vercel-check`, {
@@ -16960,7 +16962,10 @@ async function registerCheck(token, endformUrl) {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${token}`
 		},
-		body: JSON.stringify({ sha })
+		body: JSON.stringify({
+			sha,
+			jobName
+		})
 	});
 	if (!response.ok) {
 		const errorText = await response.text();

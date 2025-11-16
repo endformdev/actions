@@ -15,12 +15,18 @@ async function run() {
 		core.info("Successfully obtained OIDC token");
 		core.debug(`Token length: ${token.length}`);
 
+		// Get job name from GitHub context
+		const jobName = process.env.GITHUB_JOB;
+		if (!jobName) {
+			throw new Error("GITHUB_JOB environment variable is not set");
+		}
+
 		// Register the check with your API
 		core.info("Registering check with Endform API...");
 		if (endformUrl !== DEFAULT_ENDFORM_URL) {
 			core.info(`Using custom Endform URL: ${endformUrl}`);
 		}
-		await registerCheck(token, endformUrl);
+		await registerCheck(token, jobName, endformUrl);
 
 		core.info("Check registered successfully!");
 		core.setOutput("message", "Check registered successfully");
@@ -29,7 +35,11 @@ async function run() {
 	}
 }
 
-async function registerCheck(token: string, endformUrl: string) {
+async function registerCheck(
+	token: string,
+	jobName: string,
+	endformUrl: string,
+) {
 	// Get SHA from GitHub context
 	const sha = process.env.GITHUB_SHA;
 	if (!sha) {
@@ -46,6 +56,7 @@ async function registerCheck(token: string, endformUrl: string) {
 			},
 			body: JSON.stringify({
 				sha,
+				jobName,
 			}),
 		},
 	);
