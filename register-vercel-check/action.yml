@@ -1,6 +1,0 @@
-name: 'Register Vercel Check'
-description: 'Register a check for Vercel deployment'
-author: 'endformdev'
-runs:
-  using: 'node24'
-  main: 'dist/index.mjs'

@@ -9,8 +9,7 @@
 		"ignoreUnknown": false,
 		"includes": [
 			"**",
-			"!await-vercel-deployment/dist/index.mjs",
-			"!register-vercel-check/dist/index.mjs"
+			"!await-vercel-deployment/dist/index.mjs"
 		]
 	},
 	"formatter": {

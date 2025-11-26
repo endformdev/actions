@@ -20,7 +20,7 @@
 		"endform"
 	],
 	"scripts": {
-		"build": "pnpm --filter './await-vercel-deployment' build && pnpm --filter './register-vercel-check' build",
+		"build": "pnpm --filter './await-vercel-deployment' build",
 		"typecheck": "tsc --noEmit",
 		"format": "biome format --write"
 	},

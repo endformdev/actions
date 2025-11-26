@@ -17,5 +17,5 @@
 		"verbatimModuleSyntax": true,
 		"skipLibCheck": true
 	},
-	"include": ["await-vercel-deployment/src", "register-vercel-check/src"]
+	"include": ["await-vercel-deployment/src"]
 }

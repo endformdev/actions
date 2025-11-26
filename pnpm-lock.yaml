@@ -27,8 +27,6 @@ importers:
 
   await-vercel-deployment: {}
 
-  register-vercel-check: {}
-
 packages:
 
   '@actions/core@1.11.1':
