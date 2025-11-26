@@ -123,10 +123,11 @@ async function waitForVercelDeployment(
 			});
 
 			if (response.status === 404) {
-				// Deployment not found yet, continue polling
-				core.info("Deployment not found yet, will retry...");
-				await sleep(POLL_INTERVAL_MS);
-				continue;
+				// Deployment not found yet, this normally means that endform is not set up correctly for this project.
+				const errorText = await response.text();
+				throw new Error(
+					`Deployment not found: ${response.status} ${response.statusText}\n${errorText}`,
+				);
 			}
 
 			if (response.status === 403) {

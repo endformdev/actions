@@ -16987,9 +16987,8 @@ async function waitForVercelDeployment(token, sha, jobName, projectName, project
 				})
 			});
 			if (response.status === 404) {
-				import_core.info("Deployment not found yet, will retry...");
-				await sleep(POLL_INTERVAL_MS);
-				continue;
+				const errorText = await response.text();
+				throw new Error(`Deployment not found: ${response.status} ${response.statusText}\n${errorText}`);
 			}
 			if (response.status === 403) {
 				const errorText = await response.text();
