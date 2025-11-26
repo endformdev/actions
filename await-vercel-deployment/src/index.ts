@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as core from "@actions/core";
 
 const DEFAULT_ENDFORM_URL = "https://endform.dev";
@@ -47,7 +48,27 @@ async function run() {
 		}
 
 		// Get SHA from GitHub context
-		const sha = process.env.GITHUB_SHA;
+		// For pull_request events, use the head SHA instead of the merge commit SHA
+		let sha = process.env.GITHUB_SHA;
+		const eventName = process.env.GITHUB_EVENT_NAME;
+
+		if (eventName === "pull_request" || eventName === "pull_request_target") {
+			try {
+				const eventPath = process.env.GITHUB_EVENT_PATH;
+				if (eventPath) {
+					const eventData = JSON.parse(readFileSync(eventPath, "utf8"));
+					if (eventData.pull_request?.head?.sha) {
+						sha = eventData.pull_request.head.sha;
+						core.info(`Using PR head SHA: ${sha} (instead of merge commit)`);
+					}
+				}
+			} catch (error) {
+				core.warning(
+					`Failed to get PR head SHA, falling back to GITHUB_SHA: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+
 		if (!sha) {
 			throw new Error("GITHUB_SHA environment variable is not set");
 		}

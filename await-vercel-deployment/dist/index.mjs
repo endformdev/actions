@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 
 //#region rolldown:runtime
 var __create = Object.create;
@@ -16949,7 +16950,20 @@ async function run() {
 		import_core.debug(`Token length: ${token.length}`);
 		if (!projectName && !projectId) throw new Error("Either 'project-name' or 'project-id' input must be provided");
 		if (Number.isNaN(timeoutSeconds) || timeoutSeconds <= 0) throw new Error("'timeout-seconds' must be a positive number");
-		const sha = process.env.GITHUB_SHA;
+		let sha = process.env.GITHUB_SHA;
+		const eventName = process.env.GITHUB_EVENT_NAME;
+		if (eventName === "pull_request" || eventName === "pull_request_target") try {
+			const eventPath = process.env.GITHUB_EVENT_PATH;
+			if (eventPath) {
+				const eventData = JSON.parse(readFileSync(eventPath, "utf8"));
+				if (eventData.pull_request?.head?.sha) {
+					sha = eventData.pull_request.head.sha;
+					import_core.info(`Using PR head SHA: ${sha} (instead of merge commit)`);
+				}
+			}
+		} catch (error$1) {
+			import_core.warning(`Failed to get PR head SHA, falling back to GITHUB_SHA: ${error$1 instanceof Error ? error$1.message : String(error$1)}`);
+		}
 		if (!sha) throw new Error("GITHUB_SHA environment variable is not set");
 		const jobName = process.env.GITHUB_JOB;
 		if (!jobName) throw new Error("GITHUB_JOB environment variable is not set");
