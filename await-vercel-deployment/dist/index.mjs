@@ -16938,17 +16938,11 @@ var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
 const DEFAULT_ENDFORM_URL = "https://endform.dev";
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const POLL_INTERVAL_MS = 5e3;
-/**
-* Deployment statuses that indicate the deployment is still in progress
-*/
 const IN_PROGRESS_STATUSES = [
 	"BUILDING",
 	"INITIALIZING",
 	"QUEUED"
 ];
-/**
-* Deployment statuses that indicate a terminal failure state
-*/
 const FAILED_STATUSES = ["ERROR", "CANCELED"];
 async function run() {
 	try {
@@ -16957,9 +16951,8 @@ async function run() {
 		const setUrlEnvVar = import_core.getInput("set-url-env-var", { required: true });
 		const timeoutSeconds = Number.parseInt(import_core.getInput("timeout-seconds") || String(DEFAULT_TIMEOUT_SECONDS), 10);
 		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
-		const token = await getOIDCToken();
+		const tokenWithExpiry = await createTokenWithExpiry();
 		import_core.info("Successfully obtained OIDC token");
-		import_core.debug(`Token length: ${token.length}`);
 		if (!projectName && !projectId) throw new Error("Either 'project-name' or 'project-id' input must be provided");
 		if (Number.isNaN(timeoutSeconds) || timeoutSeconds <= 0) throw new Error("'timeout-seconds' must be a positive number");
 		let sha = process.env.GITHUB_SHA;
@@ -16982,7 +16975,7 @@ async function run() {
 		import_core.info(`Waiting for Vercel deployment (${projectName || projectId})...`);
 		import_core.info(`Timeout: ${timeoutSeconds} seconds`);
 		if (endformUrl !== DEFAULT_ENDFORM_URL) import_core.info(`Using custom Endform URL: ${endformUrl}`);
-		const result = await waitForVercelDeployment(token, sha, jobName, projectName || null, projectId || null, timeoutSeconds, endformUrl);
+		const result = await waitForVercelDeployment(tokenWithExpiry, sha, jobName, projectName || null, projectId || null, timeoutSeconds, endformUrl);
 		import_core.exportVariable(setUrlEnvVar, result.deploymentURL);
 		import_core.setOutput("deployment-url", result.deploymentURL);
 		import_core.setOutput("deployment-id", result.deploymentId);
@@ -16992,13 +16985,25 @@ async function run() {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
-/**
-* Performs a single poll attempt to check deployment status.
-* Returns a discriminated union that explicitly indicates whether to:
-* - Return successfully (type: "success")
-* - Continue polling (type: "continue")
-* - Fail fatally (type: "fatal")
-*/
+async function waitForVercelDeployment(initialToken, sha, jobName, projectName, projectId, timeoutSeconds, endformUrl) {
+	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
+	const startTime = Date.now();
+	const timeoutMs = timeoutSeconds * 1e3;
+	let currentToken = initialToken;
+	while (true) {
+		if (Date.now() - startTime > timeoutMs) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
+		currentToken = await getValidToken(currentToken);
+		const result = await pollDeploymentStatus(apiUrl, currentToken.token, sha, jobName, projectName, projectId);
+		switch (result.type) {
+			case "success": return result.data;
+			case "fatal": throw new Error(result.error);
+			case "continue":
+				import_core.info(result.reason);
+				await sleep(POLL_INTERVAL_MS);
+				break;
+		}
+	}
+}
 async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId) {
 	try {
 		const response = await fetch(apiUrl, {
@@ -17072,25 +17077,21 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 		};
 	}
 }
-async function waitForVercelDeployment(token, sha, jobName, projectName, projectId, timeoutSeconds, endformUrl) {
-	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
-	const startTime = Date.now();
-	const timeoutMs = timeoutSeconds * 1e3;
-	while (true) {
-		if (Date.now() - startTime > timeoutMs) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
-		const result = await pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId);
-		switch (result.type) {
-			case "success": return result.data;
-			case "fatal": throw new Error(result.error);
-			case "continue":
-				import_core.info(result.reason);
-				await sleep(POLL_INTERVAL_MS);
-				break;
-		}
-	}
+async function createTokenWithExpiry() {
+	const token = await getOIDCToken();
+	const expiresAt = getTokenExpiry(token);
+	import_core.debug(`Token expires at: ${new Date(expiresAt).toISOString()}`);
+	return {
+		token,
+		expiresAt
+	};
 }
-function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+async function getValidToken(currentToken) {
+	if (shouldRefreshToken(currentToken)) {
+		import_core.info("OIDC token approaching expiry, refreshing...");
+		return await createTokenWithExpiry();
+	}
+	return currentToken;
 }
 async function getOIDCToken() {
 	const tokenRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
@@ -17108,6 +17109,27 @@ async function getOIDCToken() {
 	const data = await response.json();
 	if (!data.value) throw new Error("Failed to get OIDC token: No value returned");
 	return data.value;
+}
+/**
+* Decodes a JWT token and extracts the expiry claim (exp).
+* Returns the expiry timestamp in milliseconds.
+*/
+function getTokenExpiry(token) {
+	try {
+		const parts = token.split(".");
+		if (parts.length !== 3) throw new Error("Invalid JWT format");
+		const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+		if (!payload.exp || typeof payload.exp !== "number") throw new Error("Token does not contain valid exp claim");
+		return payload.exp * 1e3;
+	} catch (error$1) {
+		throw new Error(`Failed to decode token expiry: ${error$1 instanceof Error ? error$1.message : String(error$1)}`);
+	}
+}
+function shouldRefreshToken(tokenWithExpiry) {
+	return tokenWithExpiry.expiresAt - Date.now() <= 30 * 1e3;
+}
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 run();
 

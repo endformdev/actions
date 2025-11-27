@@ -17,28 +17,21 @@ interface DeploymentStatusResponse {
 	deploymentURL: string | null;
 }
 
-/**
- * Represents the result of a single poll attempt.
- * Using a discriminated union to make control flow explicit.
- */
+interface TokenWithExpiry {
+	token: string;
+	expiresAt: number; // Unix timestamp in milliseconds
+}
+
 type PollResult =
 	| { type: "success"; data: DeploymentStatusResponse }
 	| { type: "continue"; reason: string }
 	| { type: "fatal"; error: string };
 
-/**
- * Deployment statuses that indicate the deployment is still in progress
- */
 const IN_PROGRESS_STATUSES = ["BUILDING", "INITIALIZING", "QUEUED"] as const;
-
-/**
- * Deployment statuses that indicate a terminal failure state
- */
 const FAILED_STATUSES = ["ERROR", "CANCELED"] as const;
 
 async function run() {
 	try {
-		// Get inputs
 		const projectName = core.getInput("project-name");
 		const projectId = core.getInput("project-id");
 		const setUrlEnvVar = core.getInput("set-url-env-var", { required: true });
@@ -49,13 +42,9 @@ async function run() {
 		// Allow overriding Endform URL via environment variable (for testing)
 		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
 
-		// Request token with the default Endform URL as the audience (always use production for OIDC)
-		const token = await getOIDCToken();
-
+		const tokenWithExpiry = await createTokenWithExpiry();
 		core.info("Successfully obtained OIDC token");
-		core.debug(`Token length: ${token.length}`);
 
-		// Validate that at least one project identifier is provided
 		if (!projectName && !projectId) {
 			throw new Error(
 				"Either 'project-name' or 'project-id' input must be provided",
@@ -92,13 +81,11 @@ async function run() {
 			throw new Error("GITHUB_SHA environment variable is not set");
 		}
 
-		// Get job name from GitHub context
 		const jobName = process.env.GITHUB_JOB;
 		if (!jobName) {
 			throw new Error("GITHUB_JOB environment variable is not set");
 		}
 
-		// Wait for deployments
 		core.info(`Waiting for Vercel deployment (${projectName || projectId})...`);
 		core.info(`Timeout: ${timeoutSeconds} seconds`);
 		if (endformUrl !== DEFAULT_ENDFORM_URL) {
@@ -106,7 +93,7 @@ async function run() {
 		}
 
 		const result = await waitForVercelDeployment(
-			token,
+			tokenWithExpiry,
 			sha,
 			jobName,
 			projectName || null,
@@ -126,13 +113,53 @@ async function run() {
 	}
 }
 
-/**
- * Performs a single poll attempt to check deployment status.
- * Returns a discriminated union that explicitly indicates whether to:
- * - Return successfully (type: "success")
- * - Continue polling (type: "continue")
- * - Fail fatally (type: "fatal")
- */
+async function waitForVercelDeployment(
+	initialToken: TokenWithExpiry,
+	sha: string,
+	jobName: string,
+	projectName: string | null,
+	projectId: string | null,
+	timeoutSeconds: number,
+	endformUrl: string,
+): Promise<DeploymentStatusResponse> {
+	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
+	const startTime = Date.now();
+	const timeoutMs = timeoutSeconds * 1000;
+	let currentToken = initialToken;
+
+	while (true) {
+		// Check if we've exceeded the timeout
+		if (Date.now() - startTime > timeoutMs) {
+			throw new Error(
+				`Timeout waiting for deployment after ${timeoutSeconds} seconds`,
+			);
+		}
+
+		currentToken = await getValidToken(currentToken);
+		const result = await pollDeploymentStatus(
+			apiUrl,
+			currentToken.token,
+			sha,
+			jobName,
+			projectName,
+			projectId,
+		);
+
+		switch (result.type) {
+			case "success":
+				return result.data;
+
+			case "fatal":
+				throw new Error(result.error);
+
+			case "continue":
+				core.info(result.reason);
+				await sleep(POLL_INTERVAL_MS);
+				break;
+		}
+	}
+}
+
 async function pollDeploymentStatus(
 	apiUrl: string,
 	token: string,
@@ -176,8 +203,7 @@ async function pollDeploymentStatus(
 		}
 
 		if (response.status === 404) {
-			// Deployment not created yet - continue polling
-			await response.text(); // Consume response body
+			await response.text();
 			return {
 				type: "continue",
 				reason: "Deployment not found yet, waiting for it to be created",
@@ -193,10 +219,8 @@ async function pollDeploymentStatus(
 			};
 		}
 
-		// Parse successful response
 		const result = (await response.json()) as DeploymentStatusResponse;
 
-		// Handle deployment status
 		if (result.status === "READY") {
 			if (!result.deploymentURL) {
 				return {
@@ -244,61 +268,27 @@ async function pollDeploymentStatus(
 	}
 }
 
-async function waitForVercelDeployment(
-	token: string,
-	sha: string,
-	jobName: string,
-	projectName: string | null,
-	projectId: string | null,
-	timeoutSeconds: number,
-	endformUrl: string,
-): Promise<DeploymentStatusResponse> {
-	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
-	const startTime = Date.now();
-	const timeoutMs = timeoutSeconds * 1000;
+async function createTokenWithExpiry(): Promise<TokenWithExpiry> {
+	const token = await getOIDCToken();
+	const expiresAt = getTokenExpiry(token);
 
-	while (true) {
-		// Check if we've exceeded the timeout
-		if (Date.now() - startTime > timeoutMs) {
-			throw new Error(
-				`Timeout waiting for deployment after ${timeoutSeconds} seconds`,
-			);
-		}
+	core.debug(`Token expires at: ${new Date(expiresAt).toISOString()}`);
 
-		const result = await pollDeploymentStatus(
-			apiUrl,
-			token,
-			sha,
-			jobName,
-			projectName,
-			projectId,
-		);
-
-		// Handle result based on its type
-		switch (result.type) {
-			case "success":
-				// We're done!
-				return result.data;
-
-			case "fatal":
-				// Non-recoverable error - throw immediately
-				throw new Error(result.error);
-
-			case "continue":
-				// Log the reason and continue polling
-				core.info(result.reason);
-				await sleep(POLL_INTERVAL_MS);
-				break;
-		}
-	}
+	return { token, expiresAt };
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+async function getValidToken(
+	currentToken: TokenWithExpiry,
+): Promise<TokenWithExpiry> {
+	if (shouldRefreshToken(currentToken)) {
+		core.info("OIDC token approaching expiry, refreshing...");
+		return await createTokenWithExpiry();
+	}
+
+	return currentToken;
 }
 
 async function getOIDCToken(): Promise<string> {
-	// Check if OIDC is configured in the workflow
 	const tokenRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
 	const tokenRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
@@ -332,6 +322,47 @@ async function getOIDCToken(): Promise<string> {
 		throw new Error("Failed to get OIDC token: No value returned");
 	}
 	return data.value;
+}
+
+/**
+ * Decodes a JWT token and extracts the expiry claim (exp).
+ * Returns the expiry timestamp in milliseconds.
+ */
+function getTokenExpiry(token: string): number {
+	try {
+		// JWT format: header.payload.signature
+		const parts = token.split(".");
+		if (parts.length !== 3) {
+			throw new Error("Invalid JWT format");
+		}
+
+		// Decode the payload (base64url encoded)
+		const payload = JSON.parse(
+			Buffer.from(parts[1], "base64url").toString("utf8"),
+		);
+
+		if (!payload.exp || typeof payload.exp !== "number") {
+			throw new Error("Token does not contain valid exp claim");
+		}
+
+		// Convert from seconds to milliseconds
+		return payload.exp * 1000;
+	} catch (error) {
+		throw new Error(
+			`Failed to decode token expiry: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+function shouldRefreshToken(tokenWithExpiry: TokenWithExpiry): boolean {
+	const REFRESH_BUFFER_MS = 30 * 1000; // 30 seconds before expiry
+	const timeUntilExpiry = tokenWithExpiry.expiresAt - Date.now();
+
+	return timeUntilExpiry <= REFRESH_BUFFER_MS;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 run();
