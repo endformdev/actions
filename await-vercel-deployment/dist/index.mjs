@@ -16938,6 +16938,18 @@ var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
 const DEFAULT_ENDFORM_URL = "https://endform.dev";
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const POLL_INTERVAL_MS = 5e3;
+/**
+* Deployment statuses that indicate the deployment is still in progress
+*/
+const IN_PROGRESS_STATUSES = [
+	"BUILDING",
+	"INITIALIZING",
+	"QUEUED"
+];
+/**
+* Deployment statuses that indicate a terminal failure state
+*/
+const FAILED_STATUSES = ["ERROR", "CANCELED"];
 async function run() {
 	try {
 		const projectName = import_core.getInput("project-name");
@@ -16980,68 +16992,100 @@ async function run() {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
+/**
+* Performs a single poll attempt to check deployment status.
+* Returns a discriminated union that explicitly indicates whether to:
+* - Return successfully (type: "success")
+* - Continue polling (type: "continue")
+* - Fail fatally (type: "fatal")
+*/
+async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId) {
+	try {
+		const response = await fetch(apiUrl, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				"Content-Type": "application/json"
+			},
+			body: JSON.stringify({
+				sha,
+				jobName,
+				vercelProjectName: projectName,
+				vercelProjectId: projectId
+			})
+		});
+		if (response.status === 400) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Bad request: ${response.status} ${response.statusText}\n${errorText}`
+			};
+		}
+		if (response.status === 403) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Authorization failed: ${response.status} ${response.statusText}\n${errorText}`
+			};
+		}
+		if (response.status === 404) {
+			await response.text();
+			return {
+				type: "continue",
+				reason: "Deployment not found yet, waiting for it to be created"
+			};
+		}
+		if (!response.ok) {
+			const errorText = await response.text();
+			return {
+				type: "continue",
+				reason: `API request failed: ${response.status} ${response.statusText}\n${errorText}`
+			};
+		}
+		const result = await response.json();
+		if (result.status === "READY") {
+			if (!result.deploymentURL) return {
+				type: "fatal",
+				error: "Deployment is ready but no URL was provided"
+			};
+			return {
+				type: "success",
+				data: result
+			};
+		}
+		if (FAILED_STATUSES.includes(result.status)) return {
+			type: "fatal",
+			error: `Deployment failed with status: ${result.status}`
+		};
+		if (IN_PROGRESS_STATUSES.includes(result.status)) return {
+			type: "continue",
+			reason: `Deployment status: ${result.status}`
+		};
+		return {
+			type: "continue",
+			reason: `Unknown deployment status: ${result.status}`
+		};
+	} catch (error$1) {
+		return {
+			type: "continue",
+			reason: `Error checking deployment status: ${error$1 instanceof Error ? error$1.message : String(error$1)}`
+		};
+	}
+}
 async function waitForVercelDeployment(token, sha, jobName, projectName, projectId, timeoutSeconds, endformUrl) {
 	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1e3;
 	while (true) {
 		if (Date.now() - startTime > timeoutMs) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
-		try {
-			const response = await fetch(apiUrl, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json"
-				},
-				body: JSON.stringify({
-					sha,
-					jobName,
-					vercelProjectName: projectName,
-					vercelProjectId: projectId
-				})
-			});
-			if (response.status === 404) {
-				const errorText = await response.text();
-				throw new Error(`Deployment not found: ${response.status} ${response.statusText}\n${errorText}`);
-			}
-			if (response.status === 403) {
-				const errorText = await response.text();
-				throw new Error(`Authorization failed: ${response.status} ${response.statusText}\n${errorText}`);
-			}
-			if (response.status === 400) {
-				const errorText = await response.text();
-				throw new Error(`Bad request: ${response.status} ${response.statusText}\n${errorText}`);
-			}
-			if (!response.ok) {
-				const errorText = await response.text();
-				import_core.warning(`API request failed: ${response.status} ${response.statusText}\n${errorText}`);
+		const result = await pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId);
+		switch (result.type) {
+			case "success": return result.data;
+			case "fatal": throw new Error(result.error);
+			case "continue":
+				import_core.info(result.reason);
 				await sleep(POLL_INTERVAL_MS);
-				continue;
-			}
-			const result = await response.json();
-			switch (result.status) {
-				case "READY":
-					if (!result.deploymentURL) throw new Error("Deployment is ready but no URL was provided");
-					return result;
-				case "ERROR":
-				case "CANCELED": throw new Error(`Deployment failed with status: ${result.status}`);
-				case "BUILDING":
-				case "INITIALIZING":
-				case "QUEUED":
-					import_core.info(`Deployment status: ${result.status}, waiting...`);
-					await sleep(POLL_INTERVAL_MS);
-					continue;
-				default:
-					import_core.warning(`Unknown deployment status: ${result.status}`);
-					await sleep(POLL_INTERVAL_MS);
-					continue;
-			}
-		} catch (error$1) {
-			if (error$1 instanceof Error && error$1.message.startsWith("Deployment failed")) throw error$1;
-			if (error$1 instanceof Error && error$1.message.startsWith("Authorization failed")) throw error$1;
-			if (error$1 instanceof Error && error$1.message.startsWith("Bad request")) throw error$1;
-			import_core.warning(`Error checking deployment status: ${error$1 instanceof Error ? error$1.message : String(error$1)}`);
-			await sleep(POLL_INTERVAL_MS);
+				break;
 		}
 	}
 }

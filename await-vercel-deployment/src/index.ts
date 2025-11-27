@@ -17,6 +17,25 @@ interface DeploymentStatusResponse {
 	deploymentURL: string | null;
 }
 
+/**
+ * Represents the result of a single poll attempt.
+ * Using a discriminated union to make control flow explicit.
+ */
+type PollResult =
+	| { type: "success"; data: DeploymentStatusResponse }
+	| { type: "continue"; reason: string }
+	| { type: "fatal"; error: string };
+
+/**
+ * Deployment statuses that indicate the deployment is still in progress
+ */
+const IN_PROGRESS_STATUSES = ["BUILDING", "INITIALIZING", "QUEUED"] as const;
+
+/**
+ * Deployment statuses that indicate a terminal failure state
+ */
+const FAILED_STATUSES = ["ERROR", "CANCELED"] as const;
+
 async function run() {
 	try {
 		// Get inputs
@@ -107,6 +126,124 @@ async function run() {
 	}
 }
 
+/**
+ * Performs a single poll attempt to check deployment status.
+ * Returns a discriminated union that explicitly indicates whether to:
+ * - Return successfully (type: "success")
+ * - Continue polling (type: "continue")
+ * - Fail fatally (type: "fatal")
+ */
+async function pollDeploymentStatus(
+	apiUrl: string,
+	token: string,
+	sha: string,
+	jobName: string,
+	projectName: string | null,
+	projectId: string | null,
+): Promise<PollResult> {
+	try {
+		const response = await fetch(apiUrl, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				sha,
+				jobName,
+				vercelProjectName: projectName,
+				vercelProjectId: projectId,
+			}),
+		});
+
+		// Handle HTTP error responses
+		// 400/403 are fatal - they indicate configuration or auth issues
+		// 404 means deployment not found yet, so continue polling
+		if (response.status === 400) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Bad request: ${response.status} ${response.statusText}\n${errorText}`,
+			};
+		}
+
+		if (response.status === 403) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Authorization failed: ${response.status} ${response.statusText}\n${errorText}`,
+			};
+		}
+
+		if (response.status === 404) {
+			// Deployment not created yet - continue polling
+			await response.text(); // Consume response body
+			return {
+				type: "continue",
+				reason: "Deployment not found yet, waiting for it to be created",
+			};
+		}
+
+		// Other HTTP errors are transient - continue polling
+		if (!response.ok) {
+			const errorText = await response.text();
+			return {
+				type: "continue",
+				reason: `API request failed: ${response.status} ${response.statusText}\n${errorText}`,
+			};
+		}
+
+		// Parse successful response
+		const result = (await response.json()) as DeploymentStatusResponse;
+
+		// Handle deployment status
+		if (result.status === "READY") {
+			if (!result.deploymentURL) {
+				return {
+					type: "fatal",
+					error: "Deployment is ready but no URL was provided",
+				};
+			}
+			return { type: "success", data: result };
+		}
+
+		if (
+			FAILED_STATUSES.includes(
+				result.status as (typeof FAILED_STATUSES)[number],
+			)
+		) {
+			return {
+				type: "fatal",
+				error: `Deployment failed with status: ${result.status}`,
+			};
+		}
+
+		if (
+			IN_PROGRESS_STATUSES.includes(
+				result.status as (typeof IN_PROGRESS_STATUSES)[number],
+			)
+		) {
+			return {
+				type: "continue",
+				reason: `Deployment status: ${result.status}`,
+			};
+		}
+
+		// Unknown status - treat as in-progress and continue
+		return {
+			type: "continue",
+			reason: `Unknown deployment status: ${result.status}`,
+		};
+	} catch (error) {
+		// Network errors and other exceptions are transient - continue polling
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		return {
+			type: "continue",
+			reason: `Error checking deployment status: ${errorMessage}`,
+		};
+	}
+}
+
 async function waitForVercelDeployment(
 	token: string,
 	sha: string,
@@ -128,107 +265,30 @@ async function waitForVercelDeployment(
 			);
 		}
 
-		try {
-			const response = await fetch(apiUrl, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					sha,
-					jobName,
-					vercelProjectName: projectName,
-					vercelProjectId: projectId,
-				}),
-			});
+		const result = await pollDeploymentStatus(
+			apiUrl,
+			token,
+			sha,
+			jobName,
+			projectName,
+			projectId,
+		);
 
-			if (response.status === 404) {
-				// Deployment not found yet, this normally means that endform is not set up correctly for this project.
-				const errorText = await response.text();
-				throw new Error(
-					`Deployment not found: ${response.status} ${response.statusText}\n${errorText}`,
-				);
-			}
+		// Handle result based on its type
+		switch (result.type) {
+			case "success":
+				// We're done!
+				return result.data;
 
-			if (response.status === 403) {
-				// Authorization error - don't retry
-				const errorText = await response.text();
-				throw new Error(
-					`Authorization failed: ${response.status} ${response.statusText}\n${errorText}`,
-				);
-			}
+			case "fatal":
+				// Non-recoverable error - throw immediately
+				throw new Error(result.error);
 
-			if (response.status === 400) {
-				// Bad request - don't retry
-				const errorText = await response.text();
-				throw new Error(
-					`Bad request: ${response.status} ${response.statusText}\n${errorText}`,
-				);
-			}
-
-			if (!response.ok) {
-				// Other error - retry
-				const errorText = await response.text();
-				core.warning(
-					`API request failed: ${response.status} ${response.statusText}\n${errorText}`,
-				);
+			case "continue":
+				// Log the reason and continue polling
+				core.info(result.reason);
 				await sleep(POLL_INTERVAL_MS);
-				continue;
-			}
-
-			const result = (await response.json()) as DeploymentStatusResponse;
-
-			// Check deployment status
-			switch (result.status) {
-				case "READY":
-					// Deployment is ready!
-					if (!result.deploymentURL) {
-						throw new Error("Deployment is ready but no URL was provided");
-					}
-					return result;
-
-				case "ERROR":
-				case "CANCELED":
-					// Deployment failed
-					throw new Error(`Deployment failed with status: ${result.status}`);
-
-				case "BUILDING":
-				case "INITIALIZING":
-				case "QUEUED":
-					// Still in progress, continue polling
-					core.info(`Deployment status: ${result.status}, waiting...`);
-					await sleep(POLL_INTERVAL_MS);
-					continue;
-
-				default:
-					core.warning(`Unknown deployment status: ${result.status}`);
-					await sleep(POLL_INTERVAL_MS);
-					continue;
-			}
-		} catch (error) {
-			// If it's our own thrown error, re-throw it
-			if (
-				error instanceof Error &&
-				error.message.startsWith("Deployment failed")
-			) {
-				throw error;
-			}
-			if (
-				error instanceof Error &&
-				error.message.startsWith("Authorization failed")
-			) {
-				throw error;
-			}
-			if (error instanceof Error && error.message.startsWith("Bad request")) {
-				throw error;
-			}
-
-			// Network or other transient error - log and retry
-			core.warning(
-				`Error checking deployment status: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			await sleep(POLL_INTERVAL_MS);
+				break;
 		}
 	}
 }
