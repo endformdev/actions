@@ -202,6 +202,14 @@ async function pollDeploymentStatus(
 			};
 		}
 
+		if (response.status === 409) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Conflict when fetching deployment status: ${response.status} ${response.statusText}\n${errorText}`,
+			};
+		}
+
 		if (response.status === 404) {
 			await response.text();
 			return {
