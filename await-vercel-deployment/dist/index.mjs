@@ -17033,11 +17033,25 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 				error: `Authorization failed: ${response.status} ${response.statusText}\n${errorText}`
 			};
 		}
+		if (response.status === 409) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Conflict when fetching deployment status: ${response.status} ${response.statusText}\n${errorText}`
+			};
+		}
 		if (response.status === 404) {
 			await response.text();
 			return {
 				type: "continue",
 				reason: "Deployment not found yet, waiting for it to be created"
+			};
+		}
+		if (response.status >= 500 && response.status < 600) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Server error: ${response.status} ${response.statusText}\n${errorText}`
 			};
 		}
 		if (!response.ok) {

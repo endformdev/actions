@@ -218,6 +218,15 @@ async function pollDeploymentStatus(
 			};
 		}
 
+		// if the response is 5xx, it's a fatal error
+		if (response.status >= 500 && response.status < 600) {
+			const errorText = await response.text();
+			return {
+				type: "fatal",
+				error: `Server error: ${response.status} ${response.statusText}\n${errorText}`,
+			};
+		}
+
 		// Other HTTP errors are transient - continue polling
 		if (!response.ok) {
 			const errorText = await response.text();
