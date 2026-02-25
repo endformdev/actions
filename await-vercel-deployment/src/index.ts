@@ -15,6 +15,7 @@ interface DeploymentStatusResponse {
 		| "READY"
 		| "CANCELED";
 	deploymentURL: string | null;
+	deploymentProtectionBypassToken: string | null;
 }
 
 interface TokenWithExpiry {
@@ -38,6 +39,9 @@ async function run() {
 		const timeoutSeconds = Number.parseInt(
 			core.getInput("timeout-seconds") || String(DEFAULT_TIMEOUT_SECONDS),
 			10,
+		);
+		const deploymentProtectionBypass = core.getBooleanInput(
+			"deployment-protection-bypass",
 		);
 		// Allow overriding Endform URL via environment variable (for testing)
 		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
@@ -99,8 +103,29 @@ async function run() {
 			projectName || null,
 			projectId || null,
 			timeoutSeconds,
+			deploymentProtectionBypass,
 			endformUrl,
 		);
+
+		if (result.deploymentProtectionBypassToken) {
+			core.setSecret(result.deploymentProtectionBypassToken);
+
+			const actionHeaders = {
+				"x-vercel-protection-bypass": result.deploymentProtectionBypassToken,
+			};
+			const existingHeaders = parseExtraHttpHeadersEnv(
+				process.env.ENDFORM_EXTRA_HTTP_HEADERS,
+			);
+			const mergedHeaders = {
+				...actionHeaders,
+				...existingHeaders,
+			};
+
+			core.exportVariable(
+				"ENDFORM_EXTRA_HTTP_HEADERS",
+				JSON.stringify(mergedHeaders),
+			);
+		}
 
 		core.exportVariable(setUrlEnvVar, result.deploymentURL);
 		core.setOutput("deployment-url", result.deploymentURL);
@@ -120,6 +145,7 @@ async function waitForVercelDeployment(
 	projectName: string | null,
 	projectId: string | null,
 	timeoutSeconds: number,
+	deploymentProtectionBypass: boolean,
 	endformUrl: string,
 ): Promise<DeploymentStatusResponse> {
 	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
@@ -143,6 +169,7 @@ async function waitForVercelDeployment(
 			jobName,
 			projectName,
 			projectId,
+			deploymentProtectionBypass,
 		);
 
 		switch (result.type) {
@@ -167,6 +194,7 @@ async function pollDeploymentStatus(
 	jobName: string,
 	projectName: string | null,
 	projectId: string | null,
+	deploymentProtectionBypass: boolean,
 ): Promise<PollResult> {
 	try {
 		const response = await fetch(apiUrl, {
@@ -180,6 +208,7 @@ async function pollDeploymentStatus(
 				jobName,
 				vercelProjectName: projectName,
 				vercelProjectId: projectId,
+				deploymentProtectionBypass,
 			}),
 		});
 
@@ -380,6 +409,41 @@ function shouldRefreshToken(tokenWithExpiry: TokenWithExpiry): boolean {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseExtraHttpHeadersEnv(
+	rawHeaders: string | undefined,
+): Record<string, string> {
+	if (!rawHeaders) {
+		return {};
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(rawHeaders);
+	} catch {
+		throw new Error(
+			"ENDFORM_EXTRA_HTTP_HEADERS must be valid JSON encoded as an object of string values",
+		);
+	}
+
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error(
+			"ENDFORM_EXTRA_HTTP_HEADERS must be a JSON object of string values",
+		);
+	}
+
+	const headers: Record<string, string> = {};
+	for (const [key, value] of Object.entries(parsed)) {
+		if (typeof value !== "string") {
+			throw new Error(
+				`ENDFORM_EXTRA_HTTP_HEADERS value for key '${key}' must be a string`,
+			);
+		}
+		headers[key] = value;
+	}
+
+	return headers;
 }
 
 run();

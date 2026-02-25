@@ -16950,6 +16950,7 @@ async function run() {
 		const projectId = import_core.getInput("project-id");
 		const setUrlEnvVar = import_core.getInput("set-url-env-var", { required: true });
 		const timeoutSeconds = Number.parseInt(import_core.getInput("timeout-seconds") || String(DEFAULT_TIMEOUT_SECONDS), 10);
+		const deploymentProtectionBypass = import_core.getBooleanInput("deployment-protection-bypass");
 		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
 		const tokenWithExpiry = await createTokenWithExpiry();
 		import_core.info("Successfully obtained OIDC token");
@@ -16975,7 +16976,17 @@ async function run() {
 		import_core.info(`Waiting for Vercel deployment (${projectName || projectId})...`);
 		import_core.info(`Timeout: ${timeoutSeconds} seconds`);
 		if (endformUrl !== DEFAULT_ENDFORM_URL) import_core.info(`Using custom Endform URL: ${endformUrl}`);
-		const result = await waitForVercelDeployment(tokenWithExpiry, sha, jobName, projectName || null, projectId || null, timeoutSeconds, endformUrl);
+		const result = await waitForVercelDeployment(tokenWithExpiry, sha, jobName, projectName || null, projectId || null, timeoutSeconds, deploymentProtectionBypass, endformUrl);
+		if (result.deploymentProtectionBypassToken) {
+			import_core.setSecret(result.deploymentProtectionBypassToken);
+			const actionHeaders = { "x-vercel-protection-bypass": result.deploymentProtectionBypassToken };
+			const existingHeaders = parseExtraHttpHeadersEnv(process.env.ENDFORM_EXTRA_HTTP_HEADERS);
+			const mergedHeaders = {
+				...actionHeaders,
+				...existingHeaders
+			};
+			import_core.exportVariable("ENDFORM_EXTRA_HTTP_HEADERS", JSON.stringify(mergedHeaders));
+		}
 		import_core.exportVariable(setUrlEnvVar, result.deploymentURL);
 		import_core.setOutput("deployment-url", result.deploymentURL);
 		import_core.setOutput("deployment-id", result.deploymentId);
@@ -16985,7 +16996,7 @@ async function run() {
 		import_core.setFailed(error$1 instanceof Error ? error$1.message : String(error$1));
 	}
 }
-async function waitForVercelDeployment(initialToken, sha, jobName, projectName, projectId, timeoutSeconds, endformUrl) {
+async function waitForVercelDeployment(initialToken, sha, jobName, projectName, projectId, timeoutSeconds, deploymentProtectionBypass, endformUrl) {
 	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1e3;
@@ -16993,7 +17004,7 @@ async function waitForVercelDeployment(initialToken, sha, jobName, projectName, 
 	while (true) {
 		if (Date.now() - startTime > timeoutMs) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
 		currentToken = await getValidToken(currentToken);
-		const result = await pollDeploymentStatus(apiUrl, currentToken.token, sha, jobName, projectName, projectId);
+		const result = await pollDeploymentStatus(apiUrl, currentToken.token, sha, jobName, projectName, projectId, deploymentProtectionBypass);
 		switch (result.type) {
 			case "success": return result.data;
 			case "fatal": throw new Error(result.error);
@@ -17004,7 +17015,7 @@ async function waitForVercelDeployment(initialToken, sha, jobName, projectName, 
 		}
 	}
 }
-async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId) {
+async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId, deploymentProtectionBypass) {
 	try {
 		const response = await fetch(apiUrl, {
 			method: "POST",
@@ -17016,7 +17027,8 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 				sha,
 				jobName,
 				vercelProjectName: projectName,
-				vercelProjectId: projectId
+				vercelProjectId: projectId,
+				deploymentProtectionBypass
 			})
 		});
 		if (response.status === 400) {
@@ -17144,6 +17156,22 @@ function shouldRefreshToken(tokenWithExpiry) {
 }
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function parseExtraHttpHeadersEnv(rawHeaders) {
+	if (!rawHeaders) return {};
+	let parsed;
+	try {
+		parsed = JSON.parse(rawHeaders);
+	} catch {
+		throw new Error("ENDFORM_EXTRA_HTTP_HEADERS must be valid JSON encoded as an object of string values");
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("ENDFORM_EXTRA_HTTP_HEADERS must be a JSON object of string values");
+	const headers = {};
+	for (const [key, value] of Object.entries(parsed)) {
+		if (typeof value !== "string") throw new Error(`ENDFORM_EXTRA_HTTP_HEADERS value for key '${key}' must be a string`);
+		headers[key] = value;
+	}
+	return headers;
 }
 run();
 

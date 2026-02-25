@@ -15,6 +15,10 @@ inputs:
     description: 'Maximum time to wait for deployment in seconds (default: 600 = 10 minutes)'
     required: false
     default: '600'
+  deployment-protection-bypass:
+    description: 'Whether to request Vercel deployment protection bypass token (default: true)'
+    required: false
+    default: 'true'
 outputs:
   deployment-url:
     description: 'The URL of the deployment'
