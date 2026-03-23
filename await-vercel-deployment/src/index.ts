@@ -36,6 +36,8 @@ async function run() {
 		const projectName = core.getInput("project-name");
 		const projectId = core.getInput("project-id");
 		const setUrlEnvVar = core.getInput("set-url-env-var", { required: true });
+		const setVercelBypassEnvVar = core.getInput("set-vercel-bypass-env-var");
+
 		const timeoutSeconds = Number.parseInt(
 			core.getInput("timeout-seconds") || String(DEFAULT_TIMEOUT_SECONDS),
 			10,
@@ -109,6 +111,11 @@ async function run() {
 
 		if (result.deploymentProtectionBypassToken) {
 			core.setSecret(result.deploymentProtectionBypassToken);
+			if (setVercelBypassEnvVar)
+				core.exportVariable(
+					setVercelBypassEnvVar,
+					result.deploymentProtectionBypassToken,
+				);
 
 			const actionHeaders = {
 				"x-vercel-protection-bypass": result.deploymentProtectionBypassToken,

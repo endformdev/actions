@@ -16949,6 +16949,7 @@ async function run() {
 		const projectName = import_core.getInput("project-name");
 		const projectId = import_core.getInput("project-id");
 		const setUrlEnvVar = import_core.getInput("set-url-env-var", { required: true });
+		const setVercelBypassEnvVar = import_core.getInput("set-vercel-bypass-env-var");
 		const timeoutSeconds = Number.parseInt(import_core.getInput("timeout-seconds") || String(DEFAULT_TIMEOUT_SECONDS), 10);
 		const deploymentProtectionBypass = import_core.getBooleanInput("deployment-protection-bypass");
 		const endformUrl = process.env.ENDFORM_URL || DEFAULT_ENDFORM_URL;
@@ -16979,6 +16980,7 @@ async function run() {
 		const result = await waitForVercelDeployment(tokenWithExpiry, sha, jobName, projectName || null, projectId || null, timeoutSeconds, deploymentProtectionBypass, endformUrl);
 		if (result.deploymentProtectionBypassToken) {
 			import_core.setSecret(result.deploymentProtectionBypassToken);
+			if (setVercelBypassEnvVar) import_core.exportVariable(setVercelBypassEnvVar, result.deploymentProtectionBypassToken);
 			const actionHeaders = { "x-vercel-protection-bypass": result.deploymentProtectionBypassToken };
 			const existingHeaders = parseExtraHttpHeadersEnv(process.env.ENDFORM_EXTRA_HTTP_HEADERS);
 			const mergedHeaders = {
