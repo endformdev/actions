@@ -15,7 +15,7 @@ The action:
 
 For example:
 
-```
+```yml
 name: Run end to end tests with endform
 
 on:
