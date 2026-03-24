@@ -1,5 +1,5 @@
 {
-	"name": "await-vercel-deployment",
+	"name": "run-with-vercel-deployment",
 	"version": "0.0.1",
 	"description": "Wait for Vercel deployment to complete",
 	"type": "module",

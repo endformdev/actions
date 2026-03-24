@@ -1,5 +1,5 @@
-name: 'Await Vercel Deployment'
-description: 'Wait for Vercel deployment to complete'
+name: 'Run With Vercel Deployment'
+description: 'Set environment variables for and wait for a Vercel deployment to complete'
 author: 'endformdev'
 inputs:
   project-name:

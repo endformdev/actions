@@ -155,7 +155,7 @@ async function waitForVercelDeployment(
 	deploymentProtectionBypass: boolean,
 	endformUrl: string,
 ): Promise<DeploymentStatusResponse> {
-	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
+	const apiUrl = `${endformUrl}/api/integrations/v1/actions/run-with-vercel-deployment`;
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1000;
 	let currentToken = initialToken;

@@ -16999,7 +16999,7 @@ async function run() {
 	}
 }
 async function waitForVercelDeployment(initialToken, sha, jobName, projectName, projectId, timeoutSeconds, deploymentProtectionBypass, endformUrl) {
-	const apiUrl = `${endformUrl}/api/integrations/v1/actions/await-vercel-deployment`;
+	const apiUrl = `${endformUrl}/api/integrations/v1/actions/run-with-vercel-deployment`;
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1e3;
 	let currentToken = initialToken;
