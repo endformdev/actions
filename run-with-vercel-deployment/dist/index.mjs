@@ -16938,12 +16938,6 @@ var import_core = /* @__PURE__ */ __toESM(require_core(), 1);
 const DEFAULT_ENDFORM_URL = "https://endform.dev";
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const POLL_INTERVAL_MS = 5e3;
-const IN_PROGRESS_STATUSES = [
-	"BUILDING",
-	"INITIALIZING",
-	"QUEUED"
-];
-const FAILED_STATUSES = ["ERROR", "CANCELED"];
 async function run() {
 	try {
 		const projectName = import_core.getInput("project-name");
@@ -17033,34 +17027,6 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 				deploymentProtectionBypass
 			})
 		});
-		if (response.status === 400) {
-			const errorText = await response.text();
-			return {
-				type: "fatal",
-				error: `Bad request: ${response.status} ${response.statusText}\n${errorText}`
-			};
-		}
-		if (response.status === 403) {
-			const errorText = await response.text();
-			return {
-				type: "fatal",
-				error: `Authorization failed: ${response.status} ${response.statusText}\n${errorText}`
-			};
-		}
-		if (response.status === 409) {
-			const errorText = await response.text();
-			return {
-				type: "fatal",
-				error: `Conflict when fetching deployment status: ${response.status} ${response.statusText}\n${errorText}`
-			};
-		}
-		if (response.status === 404) {
-			await response.text();
-			return {
-				type: "continue",
-				reason: "Deployment not found yet, waiting for it to be created"
-			};
-		}
 		if (response.status >= 500 && response.status < 600) {
 			const errorText = await response.text();
 			return {
@@ -17068,35 +17034,59 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 				error: `Server error: ${response.status} ${response.statusText}\n${errorText}`
 			};
 		}
-		if (!response.ok) {
-			const errorText = await response.text();
+		const responseText = await response.text();
+		let result = null;
+		try {
+			result = JSON.parse(responseText);
+		} catch {
+			if (response.status === 404) return {
+				type: "continue",
+				reason: responseText || "Deployment URL not available yet, waiting for it to be created"
+			};
+			if (response.status === 400) return {
+				type: "fatal",
+				error: `Bad request: ${responseText}`
+			};
+			if (response.status === 403) return {
+				type: "fatal",
+				error: `Authorization failed: ${responseText}`
+			};
+			if (response.status === 409) return {
+				type: "fatal",
+				error: `Conflict when fetching deployment status: ${responseText}`
+			};
 			return {
 				type: "continue",
-				reason: `API request failed: ${response.status} ${response.statusText}\n${errorText}`
+				reason: `API returned invalid JSON: ${response.status} ${response.statusText}`
 			};
 		}
-		const result = await response.json();
-		if (result.status === "READY") {
-			if (!result.deploymentURL) return {
-				type: "fatal",
-				error: "Deployment is ready but no URL was provided"
-			};
-			return {
-				type: "success",
-				data: result
-			};
-		}
-		if (FAILED_STATUSES.includes(result.status)) return {
-			type: "fatal",
-			error: `Deployment failed with status: ${result.status}`
+		if (result.type === "success" && result.status === 200) return {
+			type: "success",
+			data: result.response
 		};
-		if (IN_PROGRESS_STATUSES.includes(result.status)) return {
+		if (result.type === "not_found" && result.status === 404) return {
 			type: "continue",
-			reason: `Deployment status: ${result.status}`
+			reason: result.message || "Deployment URL not available yet, waiting for it to be created"
+		};
+		if (result.type === "bad_request" && result.status === 400) return {
+			type: "fatal",
+			error: `Bad request: ${result.message}`
+		};
+		if (result.type === "forbidden" && result.status === 403) return {
+			type: "fatal",
+			error: `Authorization failed: ${result.message}`
+		};
+		if (result.type === "conflict" && result.status === 409) return {
+			type: "fatal",
+			error: `Conflict when fetching deployment status: ${result.message}`
+		};
+		if (!response.ok) return {
+			type: "continue",
+			reason: `API request failed: ${response.status} ${response.statusText}`
 		};
 		return {
 			type: "continue",
-			reason: `Unknown deployment status: ${result.status}`
+			reason: `Unknown deployment status response: ${JSON.stringify(result)}`
 		};
 	} catch (error$1) {
 		return {

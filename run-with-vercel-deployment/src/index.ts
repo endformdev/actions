@@ -7,16 +7,16 @@ const POLL_INTERVAL_MS = 5000; // 5 seconds
 
 interface DeploymentStatusResponse {
 	deploymentId: string;
-	status:
-		| "BUILDING"
-		| "ERROR"
-		| "INITIALIZING"
-		| "QUEUED"
-		| "READY"
-		| "CANCELED";
-	deploymentURL: string | null;
+	deploymentURL: string;
 	deploymentProtectionBypassToken: string | null;
 }
+
+type DeploymentStatusResult =
+	| { status: 200; type: "success"; response: DeploymentStatusResponse }
+	| { status: 400; type: "bad_request"; message: string }
+	| { status: 403; type: "forbidden"; message: string }
+	| { status: 404; type: "not_found"; message: string }
+	| { status: 409; type: "conflict"; message: string };
 
 interface TokenWithExpiry {
 	token: string;
@@ -27,9 +27,6 @@ type PollResult =
 	| { type: "success"; data: DeploymentStatusResponse }
 	| { type: "continue"; reason: string }
 	| { type: "fatal"; error: string };
-
-const IN_PROGRESS_STATUSES = ["BUILDING", "INITIALIZING", "QUEUED"] as const;
-const FAILED_STATUSES = ["ERROR", "CANCELED"] as const;
 
 async function run() {
 	try {
@@ -219,41 +216,6 @@ async function pollDeploymentStatus(
 			}),
 		});
 
-		// Handle HTTP error responses
-		// 400/403 are fatal - they indicate configuration or auth issues
-		// 404 means deployment not found yet, so continue polling
-		if (response.status === 400) {
-			const errorText = await response.text();
-			return {
-				type: "fatal",
-				error: `Bad request: ${response.status} ${response.statusText}\n${errorText}`,
-			};
-		}
-
-		if (response.status === 403) {
-			const errorText = await response.text();
-			return {
-				type: "fatal",
-				error: `Authorization failed: ${response.status} ${response.statusText}\n${errorText}`,
-			};
-		}
-
-		if (response.status === 409) {
-			const errorText = await response.text();
-			return {
-				type: "fatal",
-				error: `Conflict when fetching deployment status: ${response.status} ${response.statusText}\n${errorText}`,
-			};
-		}
-
-		if (response.status === 404) {
-			await response.text();
-			return {
-				type: "continue",
-				reason: "Deployment not found yet, waiting for it to be created",
-			};
-		}
-
 		// if the response is 5xx, it's a fatal error
 		if (response.status >= 500 && response.status < 600) {
 			const errorText = await response.text();
@@ -263,53 +225,93 @@ async function pollDeploymentStatus(
 			};
 		}
 
-		// Other HTTP errors are transient - continue polling
-		if (!response.ok) {
-			const errorText = await response.text();
-			return {
-				type: "continue",
-				reason: `API request failed: ${response.status} ${response.statusText}\n${errorText}`,
-			};
-		}
-
-		const result = (await response.json()) as DeploymentStatusResponse;
-
-		if (result.status === "READY") {
-			if (!result.deploymentURL) {
+		const responseText = await response.text();
+		let result: DeploymentStatusResult | null = null;
+		try {
+			result = JSON.parse(responseText) as DeploymentStatusResult;
+		} catch {
+			if (response.status === 404) {
 				return {
-					type: "fatal",
-					error: "Deployment is ready but no URL was provided",
+					type: "continue",
+					reason:
+						responseText ||
+						"Deployment URL not available yet, waiting for it to be created",
 				};
 			}
-			return { type: "success", data: result };
-		}
 
-		if (
-			FAILED_STATUSES.includes(
-				result.status as (typeof FAILED_STATUSES)[number],
-			)
-		) {
-			return {
-				type: "fatal",
-				error: `Deployment failed with status: ${result.status}`,
-			};
-		}
+			if (response.status === 400) {
+				return {
+					type: "fatal",
+					error: `Bad request: ${responseText}`,
+				};
+			}
 
-		if (
-			IN_PROGRESS_STATUSES.includes(
-				result.status as (typeof IN_PROGRESS_STATUSES)[number],
-			)
-		) {
+			if (response.status === 403) {
+				return {
+					type: "fatal",
+					error: `Authorization failed: ${responseText}`,
+				};
+			}
+
+			if (response.status === 409) {
+				return {
+					type: "fatal",
+					error: `Conflict when fetching deployment status: ${responseText}`,
+				};
+			}
+
 			return {
 				type: "continue",
-				reason: `Deployment status: ${result.status}`,
+				reason: `API returned invalid JSON: ${response.status} ${response.statusText}`,
 			};
 		}
 
-		// Unknown status - treat as in-progress and continue
+		if (result.type === "success" && result.status === 200) {
+			return { type: "success", data: result.response };
+		}
+
+		if (result.type === "not_found" && result.status === 404) {
+			return {
+				type: "continue",
+				reason:
+					result.message ||
+					"Deployment URL not available yet, waiting for it to be created",
+			};
+		}
+
+		if (result.type === "bad_request" && result.status === 400) {
+			return {
+				type: "fatal",
+				error: `Bad request: ${result.message}`,
+			};
+		}
+
+		if (result.type === "forbidden" && result.status === 403) {
+			return {
+				type: "fatal",
+				error: `Authorization failed: ${result.message}`,
+			};
+		}
+
+		if (result.type === "conflict" && result.status === 409) {
+			return {
+				type: "fatal",
+				error: `Conflict when fetching deployment status: ${result.message}`,
+			};
+		}
+
+		// Other HTTP errors are transient - continue polling
+		if (!response.ok) {
+			return {
+				type: "continue",
+				reason: `API request failed: ${response.status} ${response.statusText}`,
+			};
+		}
+
+		// Unknown application-level response - treat as transient and continue
 		return {
 			type: "continue",
-			reason: `Unknown deployment status: ${result.status}`,
+			reason: `Unknown deployment status response: ${JSON.stringify(result)}`,
 		};
 	} catch (error) {
 		// Network errors and other exceptions are transient - continue polling
