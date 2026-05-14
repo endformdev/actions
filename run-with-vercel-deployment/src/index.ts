@@ -11,13 +11,6 @@ interface DeploymentStatusResponse {
 	deploymentProtectionBypassToken: string | null;
 }
 
-type DeploymentStatusResult =
-	| { status: 200; type: "success"; response: DeploymentStatusResponse }
-	| { status: 400; type: "bad_request"; message: string }
-	| { status: 403; type: "forbidden"; message: string }
-	| { status: 404; type: "not_found"; message: string }
-	| { status: 409; type: "conflict"; message: string };
-
 interface TokenWithExpiry {
 	token: string;
 	expiresAt: number; // Unix timestamp in milliseconds
@@ -226,78 +219,46 @@ async function pollDeploymentStatus(
 		}
 
 		const responseText = await response.text();
-		let result: DeploymentStatusResult | null = null;
-		try {
-			result = JSON.parse(responseText) as DeploymentStatusResult;
-		} catch {
-			if (response.status === 404) {
+		const result = parseJson(responseText);
+		const message = getResponseMessage(result);
+		const responseMessage = message || responseText;
+
+		switch (response.status) {
+			case 200:
+				if (isDeploymentStatusResponse(result)) {
+					return { type: "success", data: result };
+				}
+
+				return {
+					type: "continue",
+					reason: `Unknown deployment status response: ${formatResponseBody(result, responseText)}`,
+				};
+
+			case 400:
+				return {
+					type: "fatal",
+					error: `Bad request: ${responseMessage}`,
+				};
+
+			case 403:
+				return {
+					type: "fatal",
+					error: `Authorization failed: ${responseMessage}`,
+				};
+
+			case 404:
 				return {
 					type: "continue",
 					reason:
-						responseText ||
+						responseMessage ||
 						"Deployment URL not available yet, waiting for it to be created",
 				};
-			}
 
-			if (response.status === 400) {
+			case 409:
 				return {
 					type: "fatal",
-					error: `Bad request: ${responseText}`,
+					error: `Conflict when fetching deployment status: ${responseMessage}`,
 				};
-			}
-
-			if (response.status === 403) {
-				return {
-					type: "fatal",
-					error: `Authorization failed: ${responseText}`,
-				};
-			}
-
-			if (response.status === 409) {
-				return {
-					type: "fatal",
-					error: `Conflict when fetching deployment status: ${responseText}`,
-				};
-			}
-
-			return {
-				type: "continue",
-				reason: `API returned invalid JSON: ${response.status} ${response.statusText}`,
-			};
-		}
-
-		if (result.type === "success" && result.status === 200) {
-			return { type: "success", data: result.response };
-		}
-
-		if (result.type === "not_found" && result.status === 404) {
-			return {
-				type: "continue",
-				reason:
-					result.message ||
-					"Deployment URL not available yet, waiting for it to be created",
-			};
-		}
-
-		if (result.type === "bad_request" && result.status === 400) {
-			return {
-				type: "fatal",
-				error: `Bad request: ${result.message}`,
-			};
-		}
-
-		if (result.type === "forbidden" && result.status === 403) {
-			return {
-				type: "fatal",
-				error: `Authorization failed: ${result.message}`,
-			};
-		}
-
-		if (result.type === "conflict" && result.status === 409) {
-			return {
-				type: "fatal",
-				error: `Conflict when fetching deployment status: ${result.message}`,
-			};
 		}
 
 		// Other HTTP errors are transient - continue polling
@@ -311,7 +272,7 @@ async function pollDeploymentStatus(
 		// Unknown application-level response - treat as transient and continue
 		return {
 			type: "continue",
-			reason: `Unknown deployment status response: ${JSON.stringify(result)}`,
+			reason: `Unknown deployment status response: ${formatResponseBody(result, responseText)}`,
 		};
 	} catch (error) {
 		// Network errors and other exceptions are transient - continue polling
@@ -321,6 +282,43 @@ async function pollDeploymentStatus(
 			reason: `Error checking deployment status: ${errorMessage}`,
 		};
 	}
+}
+
+function parseJson(responseText: string): unknown {
+	try {
+		return JSON.parse(responseText);
+	} catch {
+		return undefined;
+	}
+}
+
+function formatResponseBody(result: unknown, responseText: string): string {
+	return result === undefined ? responseText : JSON.stringify(result);
+}
+
+function isDeploymentStatusResponse(
+	result: unknown,
+): result is DeploymentStatusResponse {
+	return (
+		!!result &&
+		typeof result === "object" &&
+		!Array.isArray(result) &&
+		typeof (result as DeploymentStatusResponse).deploymentId === "string" &&
+		typeof (result as DeploymentStatusResponse).deploymentURL === "string" &&
+		((result as DeploymentStatusResponse).deploymentProtectionBypassToken ===
+			null ||
+			typeof (result as DeploymentStatusResponse)
+				.deploymentProtectionBypassToken === "string")
+	);
+}
+
+function getResponseMessage(result: unknown): string | undefined {
+	if (!result || typeof result !== "object" || Array.isArray(result)) {
+		return undefined;
+	}
+
+	const message = (result as { message?: unknown }).message;
+	return typeof message === "string" ? message : undefined;
 }
 
 async function createTokenWithExpiry(): Promise<TokenWithExpiry> {

@@ -17035,58 +17035,42 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 			};
 		}
 		const responseText = await response.text();
-		let result = null;
-		try {
-			result = JSON.parse(responseText);
-		} catch {
-			if (response.status === 404) return {
+		const result = parseJson(responseText);
+		const responseMessage = getResponseMessage(result) || responseText;
+		switch (response.status) {
+			case 200:
+				if (isDeploymentStatusResponse(result)) return {
+					type: "success",
+					data: result
+				};
+				return {
+					type: "continue",
+					reason: `Unknown deployment status response: ${formatResponseBody(result, responseText)}`
+				};
+			case 400: return {
+				type: "fatal",
+				error: `Bad request: ${responseMessage}`
+			};
+			case 403: return {
+				type: "fatal",
+				error: `Authorization failed: ${responseMessage}`
+			};
+			case 404: return {
 				type: "continue",
-				reason: responseText || "Deployment URL not available yet, waiting for it to be created"
+				reason: responseMessage || "Deployment URL not available yet, waiting for it to be created"
 			};
-			if (response.status === 400) return {
+			case 409: return {
 				type: "fatal",
-				error: `Bad request: ${responseText}`
-			};
-			if (response.status === 403) return {
-				type: "fatal",
-				error: `Authorization failed: ${responseText}`
-			};
-			if (response.status === 409) return {
-				type: "fatal",
-				error: `Conflict when fetching deployment status: ${responseText}`
-			};
-			return {
-				type: "continue",
-				reason: `API returned invalid JSON: ${response.status} ${response.statusText}`
+				error: `Conflict when fetching deployment status: ${responseMessage}`
 			};
 		}
-		if (result.type === "success" && result.status === 200) return {
-			type: "success",
-			data: result.response
-		};
-		if (result.type === "not_found" && result.status === 404) return {
-			type: "continue",
-			reason: result.message || "Deployment URL not available yet, waiting for it to be created"
-		};
-		if (result.type === "bad_request" && result.status === 400) return {
-			type: "fatal",
-			error: `Bad request: ${result.message}`
-		};
-		if (result.type === "forbidden" && result.status === 403) return {
-			type: "fatal",
-			error: `Authorization failed: ${result.message}`
-		};
-		if (result.type === "conflict" && result.status === 409) return {
-			type: "fatal",
-			error: `Conflict when fetching deployment status: ${result.message}`
-		};
 		if (!response.ok) return {
 			type: "continue",
 			reason: `API request failed: ${response.status} ${response.statusText}`
 		};
 		return {
 			type: "continue",
-			reason: `Unknown deployment status response: ${JSON.stringify(result)}`
+			reason: `Unknown deployment status response: ${formatResponseBody(result, responseText)}`
 		};
 	} catch (error$1) {
 		return {
@@ -17094,6 +17078,24 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 			reason: `Error checking deployment status: ${error$1 instanceof Error ? error$1.message : String(error$1)}`
 		};
 	}
+}
+function parseJson(responseText) {
+	try {
+		return JSON.parse(responseText);
+	} catch {
+		return;
+	}
+}
+function formatResponseBody(result, responseText) {
+	return result === void 0 ? responseText : JSON.stringify(result);
+}
+function isDeploymentStatusResponse(result) {
+	return !!result && typeof result === "object" && !Array.isArray(result) && typeof result.deploymentId === "string" && typeof result.deploymentURL === "string" && (result.deploymentProtectionBypassToken === null || typeof result.deploymentProtectionBypassToken === "string");
+}
+function getResponseMessage(result) {
+	if (!result || typeof result !== "object" || Array.isArray(result)) return;
+	const message = result.message;
+	return typeof message === "string" ? message : void 0;
 }
 async function createTokenWithExpiry() {
 	const token = await getOIDCToken();
