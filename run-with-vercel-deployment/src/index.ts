@@ -240,6 +240,12 @@ async function pollDeploymentStatus(
 					error: `Bad request: ${responseMessage}`,
 				};
 
+			case 401:
+				return {
+					type: "fatal",
+					error: `Authentication failed: ${responseMessage}`,
+				};
+
 			case 403:
 				return {
 					type: "fatal",
