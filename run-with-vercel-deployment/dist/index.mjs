@@ -17083,19 +17083,19 @@ function parseJson(responseText) {
 	try {
 		return JSON.parse(responseText);
 	} catch {
-		return;
+		return null;
 	}
 }
 function formatResponseBody(result, responseText) {
-	return result === void 0 ? responseText : JSON.stringify(result);
+	return result === null ? responseText : JSON.stringify(result);
 }
 function isDeploymentStatusResponse(result) {
 	return !!result && typeof result === "object" && !Array.isArray(result) && typeof result.deploymentId === "string" && typeof result.deploymentURL === "string" && (result.deploymentProtectionBypassToken === null || typeof result.deploymentProtectionBypassToken === "string");
 }
 function getResponseMessage(result) {
-	if (!result || typeof result !== "object" || Array.isArray(result)) return;
-	const message = result.message;
-	return typeof message === "string" ? message : void 0;
+	if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+	const message = result.error?.message;
+	return typeof message === "string" ? message : null;
 }
 async function createTokenWithExpiry() {
 	const token = await getOIDCToken();

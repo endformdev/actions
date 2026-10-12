@@ -288,12 +288,12 @@ function parseJson(responseText: string): unknown {
 	try {
 		return JSON.parse(responseText);
 	} catch {
-		return undefined;
+		return null;
 	}
 }
 
 function formatResponseBody(result: unknown, responseText: string): string {
-	return result === undefined ? responseText : JSON.stringify(result);
+	return result === null ? responseText : JSON.stringify(result);
 }
 
 function isDeploymentStatusResponse(
@@ -312,13 +312,13 @@ function isDeploymentStatusResponse(
 	);
 }
 
-function getResponseMessage(result: unknown): string | undefined {
+function getResponseMessage(result: unknown): string | null {
 	if (!result || typeof result !== "object" || Array.isArray(result)) {
-		return undefined;
+		return null;
 	}
 
-	const message = (result as { message?: unknown }).message;
-	return typeof message === "string" ? message : undefined;
+	const message = (result as { error?: { message?: unknown } }).error?.message;
+	return typeof message === "string" ? message : null;
 }
 
 async function createTokenWithExpiry(): Promise<TokenWithExpiry> {
