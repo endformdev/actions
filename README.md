@@ -5,7 +5,7 @@ GitHub Actions for interacting with Endform's platform
 
 Helps you to connect deployments associated with commits to an Endform test suite run.
 
-This action requires that you both have the [Endform GitHub app](https://vercel.com/marketplace/endform) and the [Endform Vercel integration](https://vercel.com/marketplace/endform) installed.
+This action requires that you both have the [Endform GitHub app](https://endform.dev/app/docs-link?link=settings-integrations) and the [Endform Vercel integration](https://vercel.com/marketplace/endform) installed.
 
 The action:
 
