@@ -6,4 +6,6 @@ export default defineConfig({
 	platform: "node",
 	target: "node24",
 	clean: true,
+	dts: false,
+	sourcemap: false,
 });
