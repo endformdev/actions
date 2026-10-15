@@ -16579,6 +16579,8 @@ function info(message) {
 const DEFAULT_ENDFORM_URL = "https://endform.dev";
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const POLL_INTERVAL_MS = 5e3;
+const REQUEST_TIMEOUT_MS = 3e4;
+const MAX_CONSECUTIVE_SERVER_ERRORS = 5;
 async function run() {
 	try {
 		const projectName = getInput("project-name");
@@ -16638,20 +16640,29 @@ async function waitForVercelDeployment(initialToken, sha, jobName, projectName, 
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1e3;
 	let currentToken = initialToken;
+	let consecutiveServerErrors = 0;
 	while (true) {
-		if (Date.now() - startTime > timeoutMs) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
+		const remainingMs = timeoutMs - (Date.now() - startTime);
+		if (remainingMs <= 0) throw new Error(`Timeout waiting for deployment after ${timeoutSeconds} seconds`);
 		currentToken = await getValidToken(currentToken);
-		const result = await pollDeploymentStatus(apiUrl, currentToken.token, sha, jobName, projectName, projectId, deploymentProtectionBypass);
+		const result = await pollDeploymentStatus(apiUrl, currentToken.token, sha, jobName, projectName, projectId, deploymentProtectionBypass, Math.min(REQUEST_TIMEOUT_MS, remainingMs));
 		switch (result.type) {
 			case "success": return result.data;
 			case "fatal": throw new Error(result.error);
+			case "server_error":
+				consecutiveServerErrors++;
+				if (consecutiveServerErrors >= MAX_CONSECUTIVE_SERVER_ERRORS) throw new Error(`${result.error}\nGave up after ${consecutiveServerErrors} server errors in a row`);
+				warning(`${result.error}\nRetrying (${consecutiveServerErrors}/${MAX_CONSECUTIVE_SERVER_ERRORS})`);
+				await sleep(POLL_INTERVAL_MS);
+				break;
 			case "continue":
+				consecutiveServerErrors = 0;
 				info(result.reason);
 				await sleep(POLL_INTERVAL_MS);
 		}
 	}
 }
-async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId, deploymentProtectionBypass) {
+async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, projectId, deploymentProtectionBypass, requestTimeoutMs) {
 	try {
 		const response = await fetch(apiUrl, {
 			method: "POST",
@@ -16665,12 +16676,13 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 				vercelProjectName: projectName,
 				vercelProjectId: projectId,
 				deploymentProtectionBypass
-			})
+			}),
+			signal: AbortSignal.timeout(requestTimeoutMs)
 		});
 		if (response.status >= 500 && response.status < 600) {
 			const errorText = await response.text();
 			return {
-				type: "fatal",
+				type: "server_error",
 				error: `Server error: ${response.status} ${response.statusText}\n${errorText}`
 			};
 		}
@@ -16717,6 +16729,10 @@ async function pollDeploymentStatus(apiUrl, token, sha, jobName, projectName, pr
 			reason: `Unknown deployment status response: ${formatResponseBody(result, responseText)}`
 		};
 	} catch (error) {
+		if (error instanceof Error && error.name === "TimeoutError") return {
+			type: "continue",
+			reason: `Deployment status request timed out after ${Math.ceil(requestTimeoutMs / 1e3)} seconds`
+		};
 		return {
 			type: "continue",
 			reason: `Error checking deployment status: ${error instanceof Error ? error.message : String(error)}`
@@ -16767,7 +16783,8 @@ async function getOIDCToken() {
 		headers: {
 			Authorization: `Bearer ${tokenRequestToken}`,
 			Accept: "application/json"
-		}
+		},
+		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
 	});
 	if (!response.ok) throw new Error(`Failed to get OIDC token: ${response.status} ${response.statusText}`);
 	const data = await response.json();
