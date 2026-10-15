@@ -4,6 +4,8 @@ import * as core from "@actions/core";
 const DEFAULT_ENDFORM_URL = "https://endform.dev";
 const DEFAULT_TIMEOUT_SECONDS = 600; // 10 minutes
 const POLL_INTERVAL_MS = 5000; // 5 seconds
+const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
+const MAX_CONSECUTIVE_SERVER_ERRORS = 5;
 
 interface DeploymentStatusResponse {
 	deploymentId: string;
@@ -19,6 +21,7 @@ interface TokenWithExpiry {
 type PollResult =
 	| { type: "success"; data: DeploymentStatusResponse }
 	| { type: "continue"; reason: string }
+	| { type: "server_error"; error: string }
 	| { type: "fatal"; error: string };
 
 async function run() {
@@ -149,10 +152,12 @@ async function waitForVercelDeployment(
 	const startTime = Date.now();
 	const timeoutMs = timeoutSeconds * 1000;
 	let currentToken = initialToken;
+	let consecutiveServerErrors = 0;
 
 	while (true) {
 		// Check if we've exceeded the timeout
-		if (Date.now() - startTime > timeoutMs) {
+		const remainingMs = timeoutMs - (Date.now() - startTime);
+		if (remainingMs <= 0) {
 			throw new Error(
 				`Timeout waiting for deployment after ${timeoutSeconds} seconds`,
 			);
@@ -167,6 +172,7 @@ async function waitForVercelDeployment(
 			projectName,
 			projectId,
 			deploymentProtectionBypass,
+			Math.min(REQUEST_TIMEOUT_MS, remainingMs),
 		);
 
 		switch (result.type) {
@@ -176,7 +182,22 @@ async function waitForVercelDeployment(
 			case "fatal":
 				throw new Error(result.error);
 
+			case "server_error":
+				consecutiveServerErrors++;
+				if (consecutiveServerErrors >= MAX_CONSECUTIVE_SERVER_ERRORS) {
+					throw new Error(
+						`${result.error}\nGave up after ${consecutiveServerErrors} server errors in a row`,
+					);
+				}
+
+				core.warning(
+					`${result.error}\nRetrying (${consecutiveServerErrors}/${MAX_CONSECUTIVE_SERVER_ERRORS})`,
+				);
+				await sleep(POLL_INTERVAL_MS);
+				break;
+
 			case "continue":
+				consecutiveServerErrors = 0;
 				core.info(result.reason);
 				await sleep(POLL_INTERVAL_MS);
 				break;
@@ -192,6 +213,7 @@ async function pollDeploymentStatus(
 	projectName: string | null,
 	projectId: string | null,
 	deploymentProtectionBypass: boolean,
+	requestTimeoutMs: number,
 ): Promise<PollResult> {
 	try {
 		const response = await fetch(apiUrl, {
@@ -207,13 +229,14 @@ async function pollDeploymentStatus(
 				vercelProjectId: projectId,
 				deploymentProtectionBypass,
 			}),
+			signal: AbortSignal.timeout(requestTimeoutMs),
 		});
 
-		// if the response is 5xx, it's a fatal error
+		// 5xx is usually transient, so the caller retries until it repeats too many times
 		if (response.status >= 500 && response.status < 600) {
 			const errorText = await response.text();
 			return {
-				type: "fatal",
+				type: "server_error",
 				error: `Server error: ${response.status} ${response.statusText}\n${errorText}`,
 			};
 		}
@@ -281,7 +304,14 @@ async function pollDeploymentStatus(
 			reason: `Unknown deployment status response: ${formatResponseBody(result, responseText)}`,
 		};
 	} catch (error) {
-		// Network errors and other exceptions are transient - continue polling
+		// Network errors, timeouts and other exceptions are transient - continue polling
+		if (error instanceof Error && error.name === "TimeoutError") {
+			return {
+				type: "continue",
+				reason: `Deployment status request timed out after ${Math.ceil(requestTimeoutMs / 1000)} seconds`,
+			};
+		}
+
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		return {
 			type: "continue",
@@ -368,6 +398,7 @@ async function getOIDCToken(): Promise<string> {
 			Authorization: `Bearer ${tokenRequestToken}`,
 			Accept: "application/json",
 		},
+		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 	});
 
 	if (!response.ok) {
